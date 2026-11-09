@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>接水管 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;gap:12px}
+  .grid{
+    position:relative;width:min(100%,430px);aspect-ratio:1/1;
+    display:grid;padding:3px;background:rgba(31,28,22,.10);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);
+  }
+  .pipe{
+    appearance:none;border:0;padding:0;background:#F7F2E6;cursor:pointer;position:relative;
+    box-shadow:inset -1px 0 0 rgba(31,28,22,.07),inset 0 -1px 0 rgba(31,28,22,.07);
+    -webkit-tap-highlight-color:transparent;
+    transition:background .16s;
+  }
+  .pipe:active{background:#EDE5D3}
+  .pipe svg{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .pipe svg g{transition:transform .19s var(--ease)}
+  .pipe .shell{fill:#C5B598}
+  .pipe .core{fill:#FCF9F1}
+  .pipe.flow .shell{fill:#C4836F}
+  .pipe.flow .core{fill:#E8B6A2}
+  /* 源：左上角上方的一小段进水口 */
+  .source{
+    position:absolute;left:3px;top:-10px;width:calc(100% / var(--n) - 6px);height:12px;
+    display:flex;justify-content:center;pointer-events:none;
+  }
+  .source i{
+    display:block;width:14px;height:100%;
+    background:linear-gradient(180deg,#B4402C,#8A2F1E);
+    box-shadow:0 0 0 1px rgba(120,40,26,.3);
+  }
+  .source i::after{
+    content:"";position:absolute;left:50%;top:-5px;transform:translateX(-50%);
+    border:4px solid transparent;border-bottom-color:#B4402C;
+  }
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XVI · Pipe Rotation</div>
+      <h1>接水管</h1>
+    </div>
+    <div class="bar__meta">通 <b id="uiPct">0%</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="grid" id="grid">
+      <div class="source"><i></i></div>
+    </div>
+    <div class="plinth">
+      <span>接通 <b id="uiFlow">0</b> / <span id="uiTotal">36</span> 格</span>
+      <span class="r" id="uiMoves">0 转</span>
+    </div>
+    <div class="hintline" style="font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2)">转动每一节，让水从左上角流遍全盘</div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-n="5">5 × 5</button>
+      <button data-n="6">6 × 6</button>
+      <button data-n="7">7 × 7</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新局
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const gridEl = document.getElementById('grid');
+  const uiFlow = document.getElementById('uiFlow');
+  const uiTotal = document.getElementById('uiTotal');
+  const uiPct = document.getElementById('uiPct');
+  const uiMoves = document.getElementById('uiMoves');
+  const segSize = document.getElementById('segSize');
+
+  const S = { n: 6, dirs: [], rot: [], els: [], done: false, turns: 0 };
+
+  function save(){ return Store.get('save.pipes', {}) || {}; }
+
+  const inb = (r, c, n) => r >= 0 && c >= 0 && r < n && c < n;
+  function step(r, c, d){
+    return d === 0 ? [r - 1, c] : d === 1 ? [r, c + 1] : d === 2 ? [r + 1, c] : [r, c - 1];
+  }
+  const ek = (a, b) => a < b ? a + ':' + b : b + ':' + a;
+
+  function generate(){
+    const n = S.n;
+    const total = n * n;
+    const edges = new Set();
+    const deg = new Array(total).fill(0);
+
+    function link(i, j, d){
+      const k = ek(i, j);
+      if(edges.has(k)) return false;
+      edges.add(k); deg[i]++; deg[j]++;
+      return true;
+    }
+
+    // 1) DFS 生成一棵覆盖全盘的树
+    const seen = new Set([0]);
+    const stack = [0];
+    let guard = 0;
+    while(stack.length && guard++ < total * 8){
+      const cur = stack[stack.length - 1];
+      const r = (cur / n) | 0, c = cur % n;
+      const cand = [];
+      for(let d = 0; d < 4; d++){
+        const [rr, cc] = step(r, c, d);
+        const ni = rr * n + cc;
+        if(inb(rr, cc, n) && !seen.has(ni)) cand.push([ni, d]);
+      }
+      if(!cand.length){ stack.pop(); continue; }
+      const [ni, d] = cand[Shell.rand(cand.length)];
+      link(cur, ni, d);
+      seen.add(ni);
+      stack.push(ni);
+    }
+
+    // 2) 度为 1 的端点补一条边，保证每节管子至少两头
+    guard = 0;
+    while(guard++ < total * 12){
+      let low = -1;
+      for(let i = 0; i < total; i++) if(deg[i] < 2){ low = i; break; }
+      if(low < 0) break;
+      const r = (low / n) | 0, c = low % n;
+      const cand = [];
+      for(let d = 0; d < 4; d++){
+        const [rr, cc] = step(r, c, d);
+        if(!inb(rr, cc, n)) continue;
+        const ni = rr * n + cc;
+        if(!edges.has(ek(low, ni)) && deg[ni] < 4) cand.push(ni);
+      }
+      if(!cand.length) break;
+      link(low, cand[Shell.rand(cand.length)], 0);
+    }
+
+    // 3) 从边集反推每格的开口方向
+    S.dirs = [];
+    for(let i = 0; i < total; i++) S.dirs.push(new Set());
+    for(const k of edges){
+      const [a, b] = k.split(':').map(Number);
+      const ra = (a / n) | 0, ca = a % n, rb = (b / n) | 0, cb = b % n;
+      let d;
+      if(rb === ra - 1) d = 0; else if(cb === ca + 1) d = 1; else if(rb === ra + 1) d = 2; else d = 3;
+      S.dirs[a].add(d);
+      S.dirs[b].add((d + 2) % 4);
+    }
+    // 左上角接进水口
+    S.dirs[0].add(0);
+
+    // 4) 随机旋转，且保证开局不是已解状态
+    let tries = 0;
+    do{
+      S.rot = [];
+      for(let i = 0; i < total; i++) S.rot.push(Shell.rand(4));
+      tries++;
+    }while(tries < 12 && flowCount() === total);
+  }
+
+  /* 当前实际开口方向 */
+  function openAt(i, d){
+    const set = S.dirs[i], r = S.rot[i];
+    for(const q of set) if((q + r) % 4 === d) return true;
+    return false;
+  }
+
+  /* 从进水口做一次 BFS，返回被水到的格子数；顺便标记 */
+  function flow(marks){
+    const n = S.n;
+    const seen = new Set();
+    if(!openAt(0, 0)) return 0;
+    const q = [0];
+    seen.add(0);
+    while(q.length){
+      const cur = q.pop();
+      const r = (cur / n) | 0, c = cur % n;
+      for(let d = 0; d < 4; d++){
+        if(!openAt(cur, d)) continue;
+        const [rr, cc] = step(r, c, d);
+        if(!inb(rr, cc, n)) continue;
+        const ni = rr * n + cc;
+        if(seen.has(ni)) continue;
+        if(!openAt(ni, (d + 2) % 4)) continue;
+        seen.add(ni);
+        q.push(ni);
+      }
+    }
+    if(marks){
+      S.els.forEach((el, i) => el.classList.toggle('flow', seen.has(i)));
+    }
+    return seen.size;
+  }
+  const flowCount = () => flow(false);
+
+  function shape(i){
+    const set = S.dirs[i];
+    let out = '';
+    for(const d of set){
+      if(d === 0) out += '<rect class="shell" x="41" y="0" width="18" height="52"/><rect class="core" x="45" y="0" width="10" height="52"/>';
+      if(d === 1) out += '<rect class="shell" x="48" y="41" width="52" height="18"/><rect class="core" x="48" y="45" width="52" height="10"/>';
+      if(d === 2) out += '<rect class="shell" x="41" y="48" width="18" height="52"/><rect class="core" x="45" y="48" width="10" height="52"/>';
+      if(d === 3) out += '<rect class="shell" x="0" y="41" width="52" height="18"/><rect class="core" x="0" y="45" width="52" height="10"/>';
+    }
+    out += '<circle class="shell" cx="50" cy="50" r="15"/><circle class="core" cx="50" cy="50" r="9"/>';
+    return '<svg viewBox="0 0 100 100"><g>' + out + '</g></svg>';
+  }
+
+  function build(){
+    gridEl.style.gridTemplateColumns = 'repeat(' + S.n + ', 1fr)';
+    // 清掉旧格子，保留 source
+    Array.prototype.slice.call(gridEl.querySelectorAll('.pipe')).forEach(e => e.remove());
+    S.els = [];
+    for(let i = 0; i < S.n * S.n; i++){
+      const b = document.createElement('button');
+      b.className = 'pipe';
+      b.dataset.i = i;
+      b.addEventListener('click', () => turn(i));
+      gridEl.appendChild(b);
+      S.els.push(b);
+    }
+    gridEl.style.setProperty('--n', S.n);
+    paint();
+  }
+
+  function paint(){
+    for(let i = 0; i < S.els.length; i++){
+      const b = S.els[i];
+      b.innerHTML = shape(i);
+      const g = b.querySelector('g');
+      g.style.transform = 'rotate(' + (S.rot[i] * 90) + 'deg)';
+      g.style.transformOrigin = '50px 50px';
+    }
+    S.els.forEach((el, i) => el.classList.remove('flow'));
+    const got = flow(true);
+    const total = S.n * S.n;
+    uiFlow.textContent = got;
+    uiTotal.textContent = total;
+    uiPct.textContent = Math.round(got / total * 100) + '%';
+    uiMoves.textContent = S.turns + ' 转';
+    return got;
+  }
+
+  function turn(i){
+    if(S.done) return;
+    S.rot[i] = (S.rot[i] + 1) % 4;
+    S.turns++;
+    Sound.tone(340 + (i % 7) * 26, .045, 'triangle', .06);
+    haptic(5);
+    const got = paint();
+    if(got === S.n * S.n) win();
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(gridEl, 460);
+    const sv = save();
+    const key = 'best' + S.n;
+    const good = !sv[key] || S.turns < sv[key];
+    if(good) sv[key] = S.turns;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.pipes', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'WATER FLOWS',
+        title: '全线接通',
+        sub: S.n + ' × ' + S.n + ' · ' + S.turns + ' 次转动',
+        stars: S.turns <= S.n * S.n * 0.7 ? 3 : S.turns <= S.n * S.n * 1.1 ? 2 : 1,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 500);
+  }
+
+  function newGame(){
+    S.done = false;
+    S.turns = 0;
+    generate();
+    build();
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.pipes', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = Math.min(7, Math.max(5, (save().n | 0) || 6));
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

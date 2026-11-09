@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>一笔画 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .board{
+    position:relative;width:min(100%,420px);aspect-ratio:1/1;
+    background:#FBF8F1;border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.04);
+    touch-action:none;
+  }
+  .board svg{position:absolute;inset:0;width:100%;height:100%}
+  .ln{stroke:rgba(31,28,22,.18);stroke-width:.55;stroke-linecap:round}
+  .ln.done{stroke:var(--accent);stroke-width:1.5;filter:drop-shadow(0 0 .6px rgba(180,64,44,.5))}
+  .dot{
+    position:absolute;width:9%;aspect-ratio:1/1;transform:translate(-50%,-50%);
+    appearance:none;border:0;background:transparent;cursor:pointer;padding:0;
+    display:grid;place-items:center;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .dot::before{
+    content:"";width:34%;height:34%;border-radius:50%;
+    background:var(--ink);opacity:.55;
+    transition:transform .16s var(--ease),opacity .16s,background .16s;
+  }
+  .dot.reach::before{opacity:.9;transform:scale(1.28)}
+  .dot.cur::before{
+    opacity:1;transform:scale(1.8);
+    background:var(--accent);box-shadow:0 0 0 4px rgba(180,64,44,.14);
+  }
+  .dot.start::before{background:var(--accent);opacity:.85}
+  .dot.start::after{
+    content:"";position:absolute;inset:2%;border:1px dashed rgba(180,64,44,.55);border-radius:50%;
+    animation:ring 2.2s linear infinite;
+  }
+  @keyframes ring{to{transform:rotate(360deg)}}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXII · One Line</div>
+      <h1>一笔画</h1>
+    </div>
+    <div class="bar__meta">线 <b id="uiLeft">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board">
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" id="svg"></svg>
+    </div>
+    <div class="plinth">
+      <span>已走 <b id="uiDone">0</b> / <span id="uiTotal">0</span> 段</span>
+      <span class="r" id="uiState">从朱红点出发</span>
+    </div>
+    <div class="hint" style="font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2)">依次点相邻的点，每条线只能走一次，走遍全部</div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-n="3">3 × 3</button>
+      <button data-n="4">4 × 4</button>
+      <button data-n="5">5 × 5</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnUndo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h9a6 6 0 0 1 0 12H8"/></svg>
+      后退
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const boardEl = document.getElementById('board');
+  const svg = document.getElementById('svg');
+  const uiLeft = document.getElementById('uiLeft');
+  const uiDone = document.getElementById('uiDone');
+  const uiTotal = document.getElementById('uiTotal');
+  const uiState = document.getElementById('uiState');
+  const segSize = document.getElementById('segSize');
+
+  const S = { n: 4, edges: new Set(), use: new Set(), cur: 0, start: 0, path: [], done: false, dots: [] };
+
+  function save(){ return Store.get('save.oneline', {}) || {}; }
+
+  const key = (a, b) => a < b ? a + ':' + b : b + ':' + a;
+  const rc = (i, n) => [(i / n) | 0, i % n];
+
+  function nbrs(i, n){
+    const [r, c] = rc(i, n);
+    const out = [];
+    if(r > 0) out.push(i - n);
+    if(c < n - 1) out.push(i + 1);
+    if(r < n - 1) out.push(i + n);
+    if(c > 0) out.push(i - 1);
+    return out;
+  }
+
+  function deg(i){
+    let d = 0;
+    for(const j of nbrs(i, S.n)) if(S.edges.has(key(i, j))) d++;
+    return d;
+  }
+
+  function generate(){
+    const n = S.n, total = n * n;
+    let tries = 0;
+    while(tries++ < 40){
+      S.edges = new Set();
+      // 生成树
+      const seen = new Set([0]);
+      const stack = [0];
+      let guard = 0;
+      while(stack.length && guard++ < total * 10){
+        const cur = stack[stack.length - 1];
+        const cand = nbrs(cur, n).filter(j => !seen.has(j));
+        if(!cand.length){ stack.pop(); continue; }
+        const ni = cand[Shell.rand(cand.length)];
+        S.edges.add(key(cur, ni));
+        seen.add(ni);
+        stack.push(ni);
+      }
+      // 随机加边，把奇度点压到 0 或 2
+      let odd = [];
+      for(let i = 0; i < total; i++) if(deg(i) % 2) odd.push(i);
+      let step = 0;
+      while(odd.length > 2 && step++ < 4000){
+        // 随机挑一条还不存在的边加上
+        const c = Shell.rand(total);
+        const cand = nbrs(c, n).filter(j => !S.edges.has(key(c, j)));
+        if(!cand.length) continue;
+        const d = cand[Shell.rand(cand.length)];
+        // 优先连两个奇点，能一次消掉两个
+        const prefer = cand.filter(j => deg(j) % 2 === 1 && deg(c) % 2 === 1);
+        const pick = prefer.length && Math.random() < 0.7 ? prefer[Shell.rand(prefer.length)] : d;
+        S.edges.add(key(c, pick));
+        odd = [];
+        for(let i = 0; i < total; i++) if(deg(i) % 2) odd.push(i);
+      }
+      if(odd.length <= 2 && S.edges.size < total * 1.9){
+        S.start = odd.length ? odd[0] : Shell.rand(total);
+        S.cur = S.start;
+        S.use = new Set();
+        S.path = [S.start];
+        S.done = false;
+        return true;
+      }
+    }
+    // 兜底：纯生成树，起点取一个端点
+    S.start = 0; S.cur = 0; S.use = new Set(); S.path = [0]; S.done = false;
+    return false;
+  }
+
+  function build(){
+    // 清掉旧的点，保留 svg
+    Array.prototype.slice.call(boardEl.querySelectorAll('.dot')).forEach(e => e.remove());
+    S.dots = [];
+    // 先画线
+    let lines = '';
+    for(const k of S.edges){
+      const [a, b] = k.split(':').map(Number);
+      const [ra, ca] = rc(a, S.n), [rb, cb] = rc(b, S.n);
+      const x1 = (ca + .5) / S.n * 100, y1 = (ra + .5) / S.n * 100;
+      const x2 = (cb + .5) / S.n * 100, y2 = (rb + .5) / S.n * 100;
+      lines += '<line class="ln" data-k="' + k + '" x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '"/>';
+    }
+    svg.innerHTML = lines;
+    // 再放点
+    for(let i = 0; i < S.n * S.n; i++){
+      const [r, c] = rc(i, S.n);
+      const b = document.createElement('button');
+      b.className = 'dot';
+      b.dataset.i = i;
+      b.style.left = ((c + .5) / S.n * 100) + '%';
+      b.style.top = ((r + .5) / S.n * 100) + '%';
+      b.addEventListener('click', () => tap(i));
+      boardEl.appendChild(b);
+      S.dots.push(b);
+    }
+    uiTotal.textContent = S.edges.size;
+    paint();
+  }
+
+  function paint(){
+    S.dots.forEach((d, i) => {
+      d.className = 'dot';
+      if(i === S.cur) d.classList.add('cur');
+      else if(i === S.start) d.classList.add('start');
+      else if(nbrs(S.cur, S.n).some(j => S.edges.has(key(S.cur, j)) && !S.use.has(key(S.cur, j)) && j === i)) d.classList.add('reach');
+    });
+    const used = new Set();
+    for(const k of S.use) used.add(k);
+    Array.prototype.forEach.call(svg.children, ln => {
+      ln.classList.toggle('done', used.has(ln.dataset.k));
+    });
+    uiDone.textContent = S.use.size;
+    uiLeft.textContent = S.edges.size - S.use.size;
+    uiState.textContent = S.done ? '完成' : (S.use.size ? '已走 ' + S.use.size + ' 段' : '从朱红点出发');
+  }
+
+  function tap(i){
+    if(S.done) return;
+    if(i === S.cur){ Sound.bad(); return; }
+    const k = key(S.cur, i);
+    if(!S.edges.has(k)){ Shell.toast('这两点之间没有线'); Sound.bad(); return; }
+    if(S.use.has(k)){ Shell.toast('这段已经走过了'); Sound.bad(); return; }
+    S.use.add(k);
+    S.cur = i;
+    S.path.push(i);
+    Sound.tone(360 + S.use.size * 14, .05, 'sine', .07);
+    haptic(7);
+    paint();
+    if(S.use.size === S.edges.size) win();
+    else if(!nbrs(S.cur, S.n).some(j => S.edges.has(key(S.cur, j)) && !S.use.has(key(S.cur, j)))){
+      uiState.textContent = '走进死角了 — 后退一步';
+      Sound.bad();
+    }
+  }
+
+  function undo(){
+    if(!S.path.length || S.done) return;
+    if(S.path.length <= 1){ Sound.bad(); return; }
+    const last = S.path.pop();
+    const prev = S.path[S.path.length - 1];
+    S.use.delete(key(prev, last));
+    S.cur = prev;
+    Sound.tone(280, .05, 'triangle', .06);
+    paint();
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(boardEl, 460);
+    const sv = save();
+    const kk = 'done' + S.n;
+    sv[kk] = (sv[kk] || 0) + 1;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.oneline', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'ONE STROKE',
+        title: '一笔走完',
+        sub: S.n + ' × ' + S.n + ' · ' + S.edges.size + ' 段线',
+        stars: S.n >= 5 ? 3 : S.n >= 4 ? 2 : 1,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 460);
+  }
+
+  function newGame(){
+    generate();
+    build();
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.oneline', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnUndo').addEventListener('click', undo);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = [3, 4, 5].indexOf(save().n) >= 0 ? save().n : 4;
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

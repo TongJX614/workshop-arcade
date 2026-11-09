@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>贪吃蛇 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 46px;}
+  .frame{
+    position:relative;
+    width:min(100%,460px);aspect-ratio:1/1;
+    border:1px solid var(--line-2);
+    background:#F0E9D8;
+    border-radius:1px;
+    box-shadow:var(--sh-deep), inset 0 0 24px rgba(31,28,22,.06);
+    touch-action:none;
+  }
+  /* 画布内框 */
+  .frame::before{
+    content:"";position:absolute;inset:5px;pointer-events:none;z-index:2;
+    border:1px solid rgba(31,28,22,.08);
+  }
+  canvas{display:block;width:100%;height:100%}
+  .overlay-hint{
+    position:absolute;left:50%;top:13%;transform:translate(-50%,0);
+    display:grid;place-items:center;
+    font-family:var(--serif);font-size:11px;letter-spacing:.24em;
+    color:var(--ink-2);pointer-events:none;transition:opacity .24s;
+    padding:9px 15px;
+    background:rgba(251,248,241,.88);
+    border:1px solid rgba(31,28,22,.16);
+    box-shadow:0 8px 18px -14px rgba(31,28,22,.8);
+    z-index:3;
+  }
+  .overlay-hint.hide{opacity:0}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">VI · Snake</div>
+      <h1>贪吃蛇</h1>
+    </div>
+    <div class="bar__meta">长度 <b id="uiLen">3</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="overlay-hint" id="hint">滑动 / 方向键</div>
+    </div>
+    <div class="plinth">
+      <span>最高 <b id="uiBest">3</b> 节</span>
+      <span class="r" id="uiState">待开始</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnPlay">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const frame = document.getElementById('frame');
+  const uiLen = document.getElementById('uiLen');
+  const uiBest = document.getElementById('uiBest');
+  const uiState = document.getElementById('uiState');
+  const hint = document.getElementById('hint');
+  const btnPlay = document.getElementById('btnPlay');
+  const btnSound = document.getElementById('btnSound');
+
+  const G = 16;
+  const S = {
+    snake: [], dir: { x: 1, y: 0 }, queue: [], food: { x: 0, y: 0 },
+    score: 0, best: (Store.get('save.snake', {}) || {}).best || 3,
+    running: false, over: false, acc: 0, last: 0, step: 170, size: 400
+  };
+
+  uiBest.textContent = S.best;
+  uiLen.textContent = '3';
+
+  /* ---------------- 画布 ---------------- */
+  function fit(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const rect = frame.getBoundingClientRect();
+    S.size = rect.width;
+    cv.width = Math.round(rect.width * dpr);
+    cv.height = Math.round(rect.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function cell(){ return S.size / G; }
+
+  function draw(){
+    const c = cell(), n = S.size;
+    ctx.clearRect(0, 0, n, n);
+
+    // 纸底：微微发暖的方格纸
+    ctx.fillStyle = '#F0E9D8';
+    ctx.fillRect(0, 0, n, n);
+
+    // 网格：每 4 格加重一道，像坐标纸
+    ctx.lineWidth = 1;
+    for(let i = 1; i < G; i++){
+      ctx.strokeStyle = i % 4 === 0 ? 'rgba(31,28,22,.10)' : 'rgba(31,28,22,.05)';
+      ctx.beginPath(); ctx.moveTo(Math.round(i * c) + .5, 0); ctx.lineTo(Math.round(i * c) + .5, n); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, Math.round(i * c) + .5); ctx.lineTo(n, Math.round(i * c) + .5); ctx.stroke();
+    }
+    // 四边压暗一点
+    const vg = ctx.createRadialGradient(n / 2, n / 2, n * .28, n / 2, n / 2, n * .76);
+    vg.addColorStop(0, 'rgba(31,28,22,0)');
+    vg.addColorStop(1, 'rgba(31,28,22,.07)');
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, n, n);
+
+    // 食物：朱红点，外圈随呼吸胀缩
+    const f = S.food;
+    const pulse = .5 + .5 * Math.sin(performance.now() / 380);
+    const fx = (f.x + .5) * c, fy = (f.y + .5) * c;
+    ctx.beginPath();
+    ctx.arc(fx, fy, c * (.40 + pulse * .10), 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(180,64,44,' + (.16 + pulse * .16).toFixed(3) + ')';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    // 投影
+    ctx.beginPath();
+    ctx.arc(fx, fy + c * .06, c * .26, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(120,40,26,.18)';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(fx, fy, c * .26, 0, Math.PI * 2);
+    ctx.fillStyle = '#B4402C';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(fx - c * .07, fy - c * .08, c * .09, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,245,238,.75)';
+    ctx.fill();
+
+    // 蛇身：一条连续的圆角粗线，比一节一节的方块更像蛇
+    if(S.snake.length > 1){
+      const pts = S.snake.map(s => [(s.x + .5) * c, (s.y + .5) * c]);
+      const stroke = (color, w, dy) => {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1] + (dy || 0));
+        for(let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1] + (dy || 0));
+        ctx.strokeStyle = color;
+        ctx.lineWidth = w;
+        ctx.stroke();
+      };
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      stroke('rgba(31,28,22,.12)', c * .74, c * .08);   // 落在地上的影
+      stroke('#1F1C16', c * .70, 0);
+      stroke('rgba(255,255,255,.07)', c * .34, -c * .06); // 背上的一道反光
+    }
+
+    // 头
+    const h = S.snake[0];
+    if(h){
+      const hx = (h.x + .5) * c, hy = (h.y + .5) * c;
+      ctx.beginPath();
+      ctx.arc(hx, hy, c * .40, 0, Math.PI * 2);
+      ctx.fillStyle = '#1F1C16';
+      ctx.fill();
+      // 眼睛跟着方向
+      const ox = S.dir.x * c * .13, oy = S.dir.y * c * .13;
+      const px = S.dir.x === 0 ? c * .14 : 0, py = S.dir.y === 0 ? c * .14 : 0;
+      ctx.fillStyle = '#F6F1E4';
+      ctx.beginPath(); ctx.arc(hx + ox - px, hy + oy - py, c * .062, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(hx + ox + px, hy + oy + py, c * .062, 0, 7); ctx.fill();
+    }
+
+    // 撞死：一层墨渍
+    if(S.over){
+      const g2 = ctx.createRadialGradient(n / 2, n / 2, n * .1, n / 2, n / 2, n * .72);
+      g2.addColorStop(0, 'rgba(31,28,22,.02)');
+      g2.addColorStop(1, 'rgba(31,28,22,.16)');
+      ctx.fillStyle = g2;
+      ctx.fillRect(0, 0, n, n);
+    }
+  }
+  function roundRect(x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  /* ---------------- 逻辑 ---------------- */
+  function spawn(){
+    const free = [];
+    for(let y = 0; y < G; y++) for(let x = 0; x < G; x++){
+      if(!S.snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+    }
+    S.food = free.length ? free[(Math.random() * free.length) | 0] : { x: 0, y: 0 };
+  }
+
+  function reset(){
+    S.snake = [{ x: 8, y: 8 }, { x: 7, y: 8 }, { x: 6, y: 8 }];
+    S.dir = { x: 1, y: 0 };
+    S.queue = [];
+    S.score = 0;
+    S.step = 170;
+    S.over = false;
+    S.acc = 0;
+    spawn();
+    uiLen.textContent = '3';
+    draw();
+  }
+
+  function start(){
+    reset();
+    S.running = true;
+    S.last = performance.now();
+    uiState.textContent = '进行中';
+    btnPlay.textContent = '重开';
+    hint.classList.add('hide');
+    Sound.tone(520, .08, 'sine', .08);
+  }
+
+  function over(){
+    S.running = false;
+    S.over = true;
+    uiState.textContent = '结束';
+    Sound.lose();
+    haptic([20, 40, 20]);
+    const s = Store.get('save.snake', {}) || {};
+    const isBest = S.score + 3 > (s.best || 3);
+    s.best = Math.max(s.best || 3, S.score + 3);
+    s.plays = (s.plays || 0) + 1;
+    Store.set('save.snake', s);
+    S.best = s.best;
+    uiBest.textContent = s.best;
+    plate({
+      kicker: 'GAME OVER',
+      title: isBest ? '新纪录' : '撞到了',
+      sub: '长度 ' + (S.score + 3) + ' 节 · 吃到 ' + S.score + ' 个',
+      buttons: [
+        { label: '再来一局', kind: 'ink', onClick: () => start() },
+        { label: '返回目录', onClick: () => Shell.back('../index.html') }
+      ]
+    });
+  }
+
+  function turn(d){
+    const map = {
+      up: { x: 0, y: -1 }, down: { x: 0, y: 1 },
+      left: { x: -1, y: 0 }, right: { x: 1, y: 0 }
+    };
+    const nd = map[d];
+    if(!nd) return;
+    const last = S.queue.length ? S.queue[S.queue.length - 1] : S.dir;
+    if(nd.x === -last.x && nd.y === -last.y) return;
+    if(nd.x === last.x && nd.y === last.y) return;
+    if(S.queue.length < 2) S.queue.push(nd);
+    if(!S.running && !S.over) start();
+  }
+
+  function tick(){
+    if(S.queue.length){
+      const nd = S.queue.shift();
+      if(!(nd.x === -S.dir.x && nd.y === -S.dir.y)) S.dir = nd;
+    }
+    const head = { x: S.snake[0].x + S.dir.x, y: S.snake[0].y + S.dir.y };
+
+    if(head.x < 0 || head.y < 0 || head.x >= G || head.y >= G) return over();
+    const eats = head.x === S.food.x && head.y === S.food.y;
+    const body = eats ? S.snake : S.snake.slice(0, -1);
+    if(body.some(s => s.x === head.x && s.y === head.y)) return over();
+
+    S.snake.unshift(head);
+    if(eats){
+      S.score++;
+      uiLen.textContent = S.score + 3;
+      S.step = Math.max(78, 170 - S.score * 4.6);
+      Sound.tone(560 + (S.score % 6) * 40, .07, 'sine', .09);
+      haptic(8);
+      spawn();
+    }else{
+      S.snake.pop();
+    }
+    draw();
+  }
+
+  function loop(t){
+    requestAnimationFrame(loop);
+    if(S.running){
+      if(!S.last) S.last = t;
+      const dt = t - S.last;
+      S.last = t;
+      S.acc += dt;
+      if(S.acc > 600) S.acc = 0;   // 切后台回来别追帧
+      while(S.acc >= S.step){
+        S.acc -= S.step;
+        if(S.running) tick();
+      }
+    }
+    draw();                        // 每帧重画：食物呼吸、墨渍都靠它
+  }
+  requestAnimationFrame(loop);
+
+  /* ---------------- 事件 ---------------- */
+  document.addEventListener('keydown', e => {
+    const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right' };
+    if(map[e.key]){
+      e.preventDefault();
+      if(!S.running && S.over) start();
+      turn(map[e.key]);
+    }
+    if(e.key === ' '){ e.preventDefault(); if(!S.running && !S.over) start(); }
+  });
+  Shell.swipe(frame, d => { if(!S.running && S.over) start(); turn(d); });
+
+  btnPlay.addEventListener('click', start);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  window.addEventListener('resize', () => { fit(); });
+  document.addEventListener('visibilitychange', () => { if(document.hidden) S.running = false; });
+
+  reset();
+  fit();
+})();
+</script>
+</body>
+</html>

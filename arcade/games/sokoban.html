@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>推箱子 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 46px;}
+  .board{
+    position:relative;
+    background:#EDE6D5;
+    border:1px solid var(--line-2);
+    box-shadow:0 26px 40px -36px rgba(31,28,22,.9),inset 0 1px 0 rgba(255,255,255,.5);
+    --cell:40px;
+    touch-action:none;
+  }
+  .cell{position:absolute;width:var(--cell);height:var(--cell)}
+  /* 地面：铺了方砖的房间，接缝往下压一点 */
+  .cell.floor{
+    background:
+      linear-gradient(90deg,rgba(31,28,22,.055) 0 1px,transparent 1px),
+      linear-gradient(180deg,rgba(31,28,22,.055) 0 1px,transparent 1px),
+      radial-gradient(120% 110% at 50% -10%,rgba(255,255,255,.42),rgba(255,255,255,0) 62%);
+    box-shadow:inset 0 0 0 .5px rgba(31,28,22,.05);
+  }
+  /* 墙：带倒角的木箱墙，往下投一层影 */
+  .cell.wall{
+    background:#3B3427;
+    background-image:
+      repeating-linear-gradient(135deg,rgba(255,255,255,.055) 0 1px,transparent 1px 7px),
+      linear-gradient(180deg,rgba(255,255,255,.10) 0%,rgba(0,0,0,.12) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.16),
+      inset 0 -2px 0 rgba(0,0,0,.26),
+      0 2px 3px -1px rgba(31,28,22,.34);
+  }
+  /* 目标点：一枚朱红印章 */
+  .cell.goal::before{
+    content:"";position:absolute;left:50%;top:50%;width:46%;height:46%;
+    transform:translate(-50%,-50%);
+    border:1px solid rgba(180,64,44,.30);border-radius:50%;
+  }
+  .cell.goal::after{
+    content:"";position:absolute;left:50%;top:50%;width:30%;height:30%;
+    transform:translate(-50%,-50%) rotate(45deg);
+    border:1px solid rgba(180,64,44,.78);
+  }
+  .cell.goal.done::after{background:rgba(180,64,44,.26)}
+  .cell.goal.done::before{border-color:rgba(180,64,44,.55);animation:goalIn .36s var(--ease)}
+  @keyframes goalIn{from{transform:translate(-50%,-50%) scale(.4);opacity:0}to{transform:translate(-50%,-50%) scale(1);opacity:1}}
+  .box{
+    position:absolute;width:var(--cell);height:var(--cell);
+    transition:transform .14s cubic-bezier(.2,.9,.3,1);
+    z-index:3;pointer-events:none;
+  }
+  /* 木箱：板面 + 四角铁钉 + 斜撑 */
+  .box i{
+    position:absolute;inset:8%;
+    background-color:#C08B4C;
+    background-image:
+      radial-gradient(circle at 9% 9%,rgba(58,40,20,.55) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 91% 9%,rgba(58,40,20,.55) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 9% 91%,rgba(58,40,20,.55) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 91% 91%,rgba(58,40,20,.55) 1.1px,rgba(0,0,0,0) 1.8px),
+      linear-gradient(160deg,#D9AA6C 0%,#B77E3E 100%);
+    border:1px solid rgba(58,40,20,.62);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.44),
+      inset 0 -2px 0 rgba(58,40,20,.22),
+      0 3px 5px -3px rgba(31,28,22,.8);
+  }
+  .box i::before,.box i::after{
+    content:"";position:absolute;left:6%;right:6%;top:50%;height:1px;
+    background:rgba(58,40,20,.42);
+  }
+  .box i::before{transform:rotate(45deg)}
+  .box i::after{transform:rotate(-45deg)}
+  /* 上了目标点：朱漆封箱 */
+  .box.on i{
+    background-color:#B4402C;
+    background-image:
+      radial-gradient(circle at 9% 9%,rgba(255,240,230,.5) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 91% 9%,rgba(255,240,230,.5) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 9% 91%,rgba(255,240,230,.5) 1.1px,rgba(0,0,0,0) 1.8px),
+      radial-gradient(circle at 91% 91%,rgba(255,240,230,.5) 1.1px,rgba(0,0,0,0) 1.8px),
+      linear-gradient(160deg,#C2452C 0%,#9E3421 100%);
+    border-color:rgba(70,20,10,.65);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.3), 0 3px 6px -3px rgba(120,40,26,.7);
+  }
+  .box.on i::before,.box.on i::after{background:rgba(255,240,230,.42)}
+  .box.bump{animation:boxBump .2s ease-out}
+  @keyframes boxBump{0%{filter:none}45%{filter:brightness(1.2) saturate(1.1)}100%{filter:none}}
+  .player{
+    position:absolute;width:var(--cell);height:var(--cell);
+    transition:transform .13s cubic-bezier(.2,.9,.3,1);
+    z-index:4;pointer-events:none;
+  }
+  .player i{
+    position:absolute;inset:17%;border-radius:50%;
+    background:radial-gradient(circle at 34% 26%,#5E5642,#2A2519 72%);
+    box-shadow:0 2px 4px rgba(31,28,22,.55),inset 0 1px 0 rgba(255,255,255,.24);
+  }
+  .player i::after{
+    content:"";position:absolute;left:50%;top:50%;width:22%;height:22%;
+    transform:translate(-50%,-50%);border-radius:50%;
+    background:var(--paper-hi);opacity:.88;
+  }
+  .board.shake{animation:boardShake .24s}
+  @keyframes boardShake{
+    0%,100%{transform:translateX(0)}
+    25%{transform:translateX(-3px)}
+    60%{transform:translateX(3px)}
+  }
+  /* 选关纸页 */
+  .sheet{
+    width:100%;max-width:330px;background:var(--paper-hi);border:1px solid var(--line-2);
+    padding:18px;box-shadow:var(--sh-deep);position:relative;
+  }
+  .sheet::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:10px;
+    background-image:radial-gradient(circle at 5px 5px,rgba(31,28,22,.20) 1.5px,transparent 1.7px);
+    background-size:10px 10px;border-bottom:1px dashed rgba(31,28,22,.18);
+  }
+  .sheet h2{margin:4px 0 12px;font-size:14px;letter-spacing:.14em;font-weight:600}
+  .levels{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+  .lv{
+    appearance:none;border:0;background:var(--paper-hi);cursor:pointer;padding:12px 0;
+    font-family:var(--serif);font-size:14px;color:var(--ink);font-variant-numeric:tabular-nums;
+    transition:background .16s,color .16s;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.6);
+  }
+  .lv:hover{background:#FFFDF6}
+  .lv.cur{background:var(--ink);color:var(--paper-hi);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),inset 0 -2px 0 rgba(0,0,0,.28)}
+  .lv[disabled]{color:var(--ink-3);background:repeating-linear-gradient(45deg,rgba(31,28,22,.03) 0 4px,transparent 4px 8px);cursor:default}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">V · Sokoban</div>
+      <h1>推箱子</h1>
+    </div>
+    <div class="bar__meta">步数 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span id="uiMeta">第 <b>1</b> / 12 关 · 参考 10 步</span>
+      <span class="r" id="uiPush">推 0 次</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnLevels">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3.5" y="3.5" width="7" height="7"/><rect x="13.5" y="3.5" width="7" height="7"/><rect x="3.5" y="13.5" width="7" height="7"/><rect x="13.5" y="13.5" width="7" height="7"/></svg>
+      关卡
+    </button>
+    <span class="sep"></span>
+    <button class="btn btn--sq" id="btnUndo" title="撤销">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8H5V4"/><path d="M5.5 8.5A7 7 0 1 1 5 15"/></svg>
+    </button>
+    <button class="btn btn--sq" id="btnRestart" title="重来">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+    </button>
+    <span class="sep"></span>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, toast, haptic } = Shell;
+
+  const LEVELS = [{"w":7,"h":7,"walls":["#######","#     #","# ##  #","#     #","#  ## #","#     #","#######"],"goals":[[1,2]],"boxes":[[2,4]],"player":[5,1],"par":10},{"w":7,"h":7,"walls":["#######","#     #","# ##  #","#     #","#  ## #","#     #","#######"],"goals":[[1,3],[5,5]],"boxes":[[4,5],[2,4]],"player":[1,1],"par":13},{"w":9,"h":7,"walls":["#########","#       #","#  ###  #","#       #","#  ###  #","#       #","#########"],"goals":[[5,3],[1,4]],"boxes":[[1,4],[3,2]],"player":[1,5],"par":19},{"w":9,"h":7,"walls":["#########","#       #","#  ###  #","#       #","#  ###  #","#       #","#########"],"goals":[[2,2],[3,1],[5,3]],"boxes":[[2,6],[4,1],[4,2]],"player":[5,1],"par":21},{"w":8,"h":8,"walls":["########","#      #","# #### #","# #    #","# # ## #","#      #","#      #","########"],"goals":[[1,2],[6,3]],"boxes":[[6,2],[1,5]],"player":[6,4],"par":18},{"w":8,"h":8,"walls":["########","#      #","# #### #","# #    #","# # ## #","#      #","#      #","########"],"goals":[[6,6],[4,6],[6,3]],"boxes":[[6,6],[4,3],[2,6]],"player":[4,1],"par":15},{"w":9,"h":8,"walls":["#########","#       #","# # # # #","#   #   #","# #   # #","#   #   #","# # # # #","#########"],"goals":[[5,3],[3,1]],"boxes":[[2,3],[2,1]],"player":[3,6],"par":14},{"w":9,"h":8,"walls":["#########","#       #","# # # # #","#   #   #","# #   # #","#   #   #","# # # # #","#########"],"goals":[[5,2],[6,1],[5,5]],"boxes":[[5,2],[2,1],[5,5]],"player":[6,5],"par":19},{"w":9,"h":7,"walls":["#########","#       #","#  ###  #","#       #","#  ###  #","#       #","#########"],"goals":[[1,2],[4,1],[3,4],[1,5]],"boxes":[[3,6],[2,2],[2,1],[1,2]],"player":[1,1],"par":22},{"w":8,"h":8,"walls":["########","#      #","# #### #","# #    #","# # ## #","#      #","#      #","########"],"goals":[[3,1],[6,5],[6,1],[1,3]],"boxes":[[6,1],[1,5],[5,2],[4,1]],"player":[5,1],"par":28},{"w":9,"h":8,"walls":["#########","#       #","# # # # #","#   #   #","# #   # #","#   #   #","# # # # #","#########"],"goals":[[4,3],[5,5],[4,1],[5,2]],"boxes":[[5,2],[2,3],[2,1],[3,6]],"player":[1,2],"par":26},{"w":7,"h":7,"walls":["#######","#     #","# ##  #","#     #","#  ## #","#     #","#######"],"goals":[[5,5],[1,3],[3,3]],"boxes":[[2,4],[3,2],[5,2]],"player":[3,1],"par":25}];
+
+  const stage = document.getElementById('stage');
+  const board = document.getElementById('board');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiMeta = document.getElementById('uiMeta');
+  const uiPush = document.getElementById('uiPush');
+  const btnUndo = document.getElementById('btnUndo');
+  const btnSound = document.getElementById('btnSound');
+
+  const S = {
+    lv: 1, w: 7, h: 7, walls: [], goals: [], boxes: [], player: [1, 1],
+    moves: 0, pushes: 0, hist: [], cell: 40, boxEls: [], playerEl: null, done: false
+  };
+
+  function save(){ return Store.get('save.sokoban', {}) || {}; }
+  function wallAt(r, c){
+    if(r < 0 || c < 0 || r >= S.h || c >= S.w) return true;
+    return S.walls[r][c] === '#';
+  }
+  function boxAt(r, c){
+    for(let i = 0; i < S.boxes.length; i++) if(S.boxes[i][0] === r && S.boxes[i][1] === c) return i;
+    return -1;
+  }
+  function isGoal(r, c){
+    return S.goals.some(g => g[0] === r && g[1] === c);
+  }
+
+  /* ---------------- 尺寸 ---------------- */
+  function layout(){
+    const availW = Math.min(stage.clientWidth, 560) - 2;
+    const availH = stage.clientHeight - 46 - 10;
+    const cell = Math.max(18, Math.floor(Math.min(availW / S.w, availH / S.h)));
+    S.cell = cell;
+    board.style.setProperty('--cell', cell + 'px');
+    board.style.width = (cell * S.w) + 'px';
+    board.style.height = (cell * S.h) + 'px';
+    positionAll();
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function build(){
+    board.innerHTML = '';
+    S.boxEls = [];
+    const cell = S.cell;
+
+    for(let r = 0; r < S.h; r++) for(let c = 0; c < S.w; c++){
+      const d = document.createElement('div');
+      const isW = S.walls[r][c] === '#';
+      d.className = 'cell ' + (isW ? 'wall' : 'floor') + (isGoal(r, c) ? ' goal' : '');
+      d.style.transform = 'translate(' + c * cell + 'px,' + r * cell + 'px)';
+      board.appendChild(d);
+    }
+
+    S.boxes.forEach(() => {
+      const b = document.createElement('div');
+      b.className = 'box';
+      b.innerHTML = '<i></i>';
+      board.appendChild(b);
+      S.boxEls.push(b);
+    });
+
+    S.playerEl = document.createElement('div');
+    S.playerEl.className = 'player';
+    S.playerEl.innerHTML = '<i></i>';
+    board.appendChild(S.playerEl);
+
+    positionAll();
+  }
+
+  function positionAll(){
+    const cell = S.cell;
+    S.boxes.forEach((b, i) => {
+      const el = S.boxEls[i];
+      if(!el) return;
+      el.style.transform = 'translate(' + b[1] * cell + 'px,' + b[0] * cell + 'px)';
+      el.classList.toggle('on', isGoal(b[0], b[1]));
+    });
+    if(S.playerEl){
+      S.playerEl.style.transform = 'translate(' + S.player[1] * cell + 'px,' + S.player[0] * cell + 'px)';
+    }
+    // 目标点状态
+    Array.prototype.forEach.call(board.children, (el, i) => {
+      if(!el.classList.contains('goal')) return;
+      const r = Math.floor(i / S.w), c = i % S.w;
+      el.classList.toggle('done', boxAt(r, c) >= 0);
+    });
+  }
+
+  function hud(){
+    uiMoves.textContent = S.moves;
+    uiPush.textContent = '推 ' + S.pushes + ' 次';
+    uiMeta.innerHTML = '第 <b>' + S.lv + '</b> / 12 关 · 参考 ' + LEVELS[S.lv - 1].par + ' 步';
+    btnUndo.disabled = !S.hist.length;
+  }
+
+  /* ---------------- 移动 ---------------- */
+  const VEC = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+
+  function step(dir){
+    if(S.done) return;
+    const v = VEC[dir];
+    if(!v) return;
+    const nr = S.player[0] + v[0], nc = S.player[1] + v[1];
+    if(wallAt(nr, nc)){ Sound.bad(); haptic(10); return; }
+
+    const bi = boxAt(nr, nc);
+    if(bi >= 0){
+      const br = nr + v[0], bc = nc + v[1];
+      if(wallAt(br, bc) || boxAt(br, bc) >= 0){
+        Sound.bad(); haptic(16); return;
+      }
+      S.hist.push(snapshot());
+      S.boxes[bi] = [br, bc];
+      S.player = [nr, nc];
+      S.pushes++;
+      S.moves++;
+      const el = S.boxEls[bi];
+      el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
+      Sound.tone(150, .09, 'triangle', .12);
+      haptic(10);
+    }else{
+      S.hist.push(snapshot());
+      S.player = [nr, nc];
+      S.moves++;
+      Sound.tone(300, .035, 'sine', .035);
+    }
+
+    positionAll();
+    hud();
+    Shell.bump(uiMoves);
+    if(isWin()) win();
+  }
+
+  function snapshot(){
+    return { p: S.player.slice(), b: S.boxes.map(x => x.slice()), m: S.moves, pu: S.pushes };
+  }
+  function isWin(){
+    return S.boxes.every(b => isGoal(b[0], b[1]));
+  }
+
+  function undo(){
+    if(S.done || !S.hist.length) return;
+    const s = S.hist.pop();
+    S.player = s.p;
+    S.boxes = s.b;
+    S.moves = s.m;
+    S.pushes = s.pu;
+    positionAll();
+    hud();
+  }
+
+  function win(){
+    S.done = true;
+    const s = save();
+    s.maxLevel = Math.max(s.maxLevel || 1, Math.min(12, S.lv + 1));
+    s.level = Math.min(12, S.lv + 1);
+    s.plays = (s.plays || 0) + 1;
+    s.cleared = Math.max(s.cleared || 0, S.lv);
+    Store.set('save.sokoban', s);
+    Sound.win();
+    haptic([12, 40, 16]);
+    Shell.flash(board);
+    const par = LEVELS[S.lv - 1].par;
+    const stars = S.moves <= par ? 3 : S.moves <= Math.round(par * 1.7) ? 2 : 1;
+    plate({
+      kicker: 'LEVEL ' + S.lv + ' / 12',
+      title: stars === 3 ? '最优解' : '全部入位',
+      sub: S.moves + ' 步 · 推 ' + S.pushes + ' 次（参考 ' + par + ' 步）',
+      stars: stars,
+      buttons: [
+        { label: S.lv < 12 ? '下一关' : '回到第 1 关', kind: 'ink', onClick: () => load(S.lv < 12 ? S.lv + 1 : 1) },
+        { label: '重玩', onClick: () => load(S.lv) }
+      ]
+    });
+  }
+
+  /* ---------------- 载入 ---------------- */
+  function load(n){
+    const d = LEVELS[Math.max(0, Math.min(LEVELS.length - 1, n - 1))];
+    S.lv = n;
+    S.w = d.w; S.h = d.h;
+    S.walls = d.walls;
+    S.goals = d.goals.map(x => x.slice());
+    S.boxes = d.boxes.map(x => x.slice());
+    S.player = d.player.slice();
+    S.moves = 0; S.pushes = 0; S.hist = []; S.done = false;
+    layout();
+    build();
+    hud();
+    const s = save();
+    s.level = n;
+    Store.set('save.sokoban', s);
+  }
+
+  /* ---------------- 选关 ---------------- */
+  let ov = null;
+  function openLevels(){
+    if(!ov){
+      ov = document.createElement('div');
+      ov.className = 'overlay';
+      ov.innerHTML = '<div class="sheet"><h2>选择关卡 · 12</h2><div class="levels" id="lvGrid"></div></div>';
+      document.body.appendChild(ov);
+      ov.addEventListener('click', e => { if(e.target === ov) ov.classList.remove('show'); });
+    }
+    const grid = ov.querySelector('#lvGrid');
+    const max = Math.max(1, Math.min(12, save().maxLevel || 1));
+    grid.innerHTML = '';
+    LEVELS.forEach((d, i) => {
+      const b = document.createElement('button');
+      b.className = 'lv' + (i + 1 === S.lv ? ' cur' : '');
+      b.textContent = i + 1;
+      b.disabled = i + 1 > max;
+      if(!b.disabled) b.addEventListener('click', () => { ov.classList.remove('show'); load(i + 1); });
+      grid.appendChild(b);
+    });
+    ov.classList.add('show');
+  }
+
+  /* ---------------- 事件 ---------------- */
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  document.getElementById('btnLevels').addEventListener('click', openLevels);
+  document.getElementById('btnRestart').addEventListener('click', () => load(S.lv));
+  btnUndo.addEventListener('click', undo);
+
+  document.addEventListener('keydown', e => {
+    const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right' };
+    if(map[e.key]){ e.preventDefault(); step(map[e.key]); }
+  });
+  Shell.swipe(board, step);
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  window.addEventListener('resize', () => { layout(); });
+
+  const s0 = save();
+  load(s0.level || 1);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>华容道 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:14px}
+  .board{
+    position:relative;width:min(100%,360px);aspect-ratio:4/5;
+    background:#EFE6D4;border:2px solid #8C7A55;border-radius:2px;
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.10);
+    touch-action:none;
+  }
+  /* 棋盘木纹 */
+  .board::before{
+    content:"";position:absolute;inset:0;pointer-events:none;opacity:.5;
+    background:repeating-linear-gradient(90deg,rgba(140,122,85,.10) 0 1px,transparent 1px 7px);
+  }
+  /* 出口 */
+  .exit{
+    position:absolute;left:25%;right:25%;bottom:-2px;height:5px;
+    background:var(--accent);
+    box-shadow:0 0 12px rgba(180,64,44,.5);
+  }
+  .exit-label{
+    position:absolute;left:50%;bottom:-24px;transform:translateX(-50%);
+    font-family:var(--serif);font-size:9px;letter-spacing:.24em;color:var(--accent);
+    white-space:nowrap;
+  }
+  .blk{
+    position:absolute;padding:2px;cursor:pointer;
+    transition:left .16s var(--ease),top .16s var(--ease),box-shadow .16s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .blk .face{
+    width:100%;height:100%;border-radius:2px;display:grid;place-items:center;
+    font-family:var(--serif);color:rgba(255,255,255,.92);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.34),inset 0 -2px 0 rgba(0,0,0,.20),
+               0 2px 4px -3px rgba(31,28,22,.8);
+    transition:box-shadow .16s,transform .12s;
+    position:relative;overflow:hidden;
+  }
+  .blk .face::after{
+    content:"";position:absolute;inset:3px;border:1px solid rgba(255,255,255,.16);border-radius:1px;
+  }
+  .blk.v .face{writing-mode:vertical-rl;letter-spacing:.16em;font-size:13px}
+  .blk.h .face{letter-spacing:.22em;font-size:13px}
+  .blk.s .face{font-size:12px;letter-spacing:.04em}
+  .blk.cao .face{font-size:19px;letter-spacing:.14em;font-weight:600}
+  .blk.cao .face{background:linear-gradient(160deg,#C9553D,#9A3623)}
+  .blk.v .face{background:linear-gradient(160deg,#4B463C,#2A241C)}
+  .blk.h .face{background:linear-gradient(160deg,#C9A059,#9A7433)}
+  .blk.s .face{background:linear-gradient(160deg,#8E836C,#655C4B)}
+  .blk.sel{box-shadow:0 0 0 2px var(--accent),0 6px 14px -8px rgba(31,28,22,.9);z-index:5}
+  .blk.sel .face{transform:scale(.97)}
+  .blk.pop .face{animation:pop .2s var(--ease)}
+  @keyframes pop{from{transform:scale(.93)}to{transform:none;opacity:1}}
+  .plinth b{color:var(--accent)}
+  .dpad{
+    display:grid;grid-template-columns:repeat(3,40px);grid-template-rows:repeat(3,40px);gap:4px;
+  }
+  .dpad button{
+    appearance:none;border:1px solid var(--line-2);background:var(--paper-hi);cursor:pointer;
+    border-radius:2px;display:grid;place-items:center;color:var(--ink);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
+  }
+  .dpad button:active{background:rgba(31,28,22,.06)}
+  .dpad button svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .dpad .sp{visibility:hidden}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXVIII · Klotski</div>
+      <h1>华容道</h1>
+    </div>
+    <div class="bar__meta">步 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board">
+      <div class="exit"></div>
+      <div class="exit-label">出 口</div>
+    </div>
+    <div class="plinth">
+      <span>把曹操移到底部出口</span>
+      <span class="r" id="uiState">点块再点方向</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="dpad">
+      <span class="sp"></span>
+      <button data-d="0" aria-label="上"><svg viewBox="0 0 24 24"><path d="M6 14l6-6 6 6"/></svg></button>
+      <span class="sp"></span>
+      <button data-d="3" aria-label="左"><svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg></button>
+      <button data-d="2" aria-label="下"><svg viewBox="0 0 24 24"><path d="M6 10l6 6 6-6"/></svg></button>
+      <button data-d="1" aria-label="右"><svg viewBox="0 0 24 24"><path d="M10 6l6 6-6 6"/></svg></button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnReset">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      重排
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const boardEl = document.getElementById('board');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiState = document.getElementById('uiState');
+
+  const COLS = 4, ROWS = 5;
+
+  // 横刀立马
+  const START = [
+    { id: 'zf', name: '张飞', w: 1, h: 2, r: 0, c: 0, kind: 'v' },
+    { id: 'cc', name: '曹操', w: 2, h: 2, r: 0, c: 1, kind: 'cao' },
+    { id: 'zy', name: '赵云', w: 1, h: 2, r: 0, c: 3, kind: 'v' },
+    { id: 'mc', name: '马超', w: 1, h: 2, r: 2, c: 0, kind: 'v' },
+    { id: 'gy', name: '关羽', w: 2, h: 1, r: 2, c: 1, kind: 'h' },
+    { id: 'hz', name: '黄忠', w: 1, h: 2, r: 2, c: 3, kind: 'v' },
+    { id: 'z1', name: '卒', w: 1, h: 1, r: 3, c: 1, kind: 's' },
+    { id: 'z2', name: '卒', w: 1, h: 1, r: 3, c: 2, kind: 's' },
+    { id: 'z3', name: '卒', w: 1, h: 1, r: 4, c: 0, kind: 's' },
+    { id: 'z4', name: '卒', w: 1, h: 1, r: 4, c: 3, kind: 's' }
+  ];
+
+  const S = { blocks: [], sel: -1, moves: 0, done: false, els: [] };
+
+  function save(){ return Store.get('save.klotski', {}) || {}; }
+
+  function reset(){
+    S.blocks = START.map(b => Object.assign({}, b));
+    S.sel = -1; S.moves = 0; S.done = false;
+    uiMoves.textContent = '0';
+    uiState.textContent = '点块再点方向';
+    build();
+  }
+
+  function build(){
+    Array.prototype.slice.call(boardEl.querySelectorAll('.blk')).forEach(e => e.remove());
+    S.els = [];
+    S.blocks.forEach((b, i) => {
+      const el = document.createElement('div');
+      el.className = 'blk ' + b.kind;
+      el.dataset.i = i;
+      el.innerHTML = '<div class="face">' + b.name + '</div>';
+      el.addEventListener('click', e => { e.stopPropagation(); select(i); });
+      boardEl.appendChild(el);
+      S.els.push(el);
+    });
+    paint();
+  }
+
+  function paint(){
+    S.blocks.forEach((b, i) => {
+      const el = S.els[i];
+      el.style.left = (b.c / COLS * 100) + '%';
+      el.style.top = (b.r / ROWS * 100) + '%';
+      el.style.width = (b.w / COLS * 100) + '%';
+      el.style.height = (b.h / ROWS * 100) + '%';
+      el.classList.toggle('sel', S.sel === i);
+      el.classList.add('pop');
+      setTimeout(() => el.classList.remove('pop'), 220);
+    });
+    uiMoves.textContent = S.moves;
+  }
+
+  function occupied(r, c, skip){
+    if(r < 0 || c < 0 || r >= ROWS || c >= COLS) return true;
+    for(let i = 0; i < S.blocks.length; i++){
+      if(i === skip) continue;
+      const b = S.blocks[i];
+      if(r >= b.r && r < b.r + b.h && c >= b.c && c < b.c + b.w) return true;
+    }
+    return false;
+  }
+
+  function canMove(b, dr, dc){
+    if(dr === 0 && dc === 0) return false;
+    const nr = b.r + dr, nc = b.c + dc;
+    if(nr < 0 || nc < 0 || nr + b.h > ROWS || nc + b.w > COLS) return false;
+    for(let r = nr; r < nr + b.h; r++) for(let c = nc; c < nc + b.w; c++){
+      const wasInside = r >= b.r && r < b.r + b.h && c >= b.c && c < b.c + b.w;
+      if(wasInside) continue;
+      if(occupied(r, c, S.blocks.indexOf(b))) return false;
+    }
+    return true;
+  }
+
+  function move(d){
+    if(S.done) return;
+    if(S.sel < 0){ Shell.toast('先点一块'); return; }
+    const b = S.blocks[S.sel];
+    const dr = d === 0 ? -1 : d === 2 ? 1 : 0;
+    const dc = d === 3 ? -1 : d === 1 ? 1 : 0;
+    if(!canMove(b, dr, dc)){
+      Sound.bad();
+      haptic(5);
+      return;
+    }
+    b.r += dr; b.c += dc;
+    S.moves++;
+    Sound.tone(400 + Math.random() * 50, .04, 'triangle', .06);
+    haptic(5);
+    paint();
+    if(b.id === 'cc' && b.r === 3 && b.c === 1 && b.h === 2) win();
+  }
+
+  function select(i){
+    if(S.done) return;
+    S.sel = i;
+    Sound.tone(520, .04, 'sine', .05);
+    haptic(4);
+    paint();
+    uiState.textContent = '选：' + S.blocks[i].name;
+  }
+
+  function win(){
+    S.done = true;
+    uiState.textContent = '曹操脱身';
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(boardEl, 500);
+    const sv = save();
+    const good = !sv.best || S.moves < sv.best;
+    if(good) sv.best = S.moves;
+    sv.plays = (sv.plays || 0) + 1;
+    sv.wins = (sv.wins || 0) + 1;
+    Store.set('save.klotski', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'ESCAPED',
+        title: '曹操脱身',
+        sub: S.moves + ' 步' + (sv.best ? ' · 最少 ' + sv.best + ' 步' : ''),
+        stars: S.moves <= 90 ? 3 : S.moves <= 130 ? 2 : 1,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: reset },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  document.querySelectorAll('.dpad button').forEach(b => {
+    b.addEventListener('click', () => move(+b.dataset.d));
+  });
+  document.addEventListener('keydown', e => {
+    const map = { ArrowUp: 0, ArrowRight: 1, ArrowDown: 2, ArrowLeft: 3 };
+    if(map[e.key] != null){ e.preventDefault(); move(map[e.key]); }
+  });
+
+  // 点空白处取消选择
+  boardEl.addEventListener('click', () => {
+    S.sel = -1;
+    paint();
+  });
+
+  // 拖动也可以：在块上按下后朝某方向拖
+  let drag = null;
+  boardEl.addEventListener('pointerdown', e => {
+    const blk = e.target.closest('.blk');
+    if(!blk) return;
+    drag = { i: +blk.dataset.i, x: e.clientX, y: e.clientY, moved: false };
+  });
+  boardEl.addEventListener('pointermove', e => {
+    if(!drag || drag.moved) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if(Math.max(Math.abs(dx), Math.abs(dy)) < 22) return;
+    drag.moved = true;
+    S.sel = drag.i;
+    if(Math.abs(dx) > Math.abs(dy)) move(dx > 0 ? 1 : 3);
+    else move(dy > 0 ? 2 : 0);
+  });
+  boardEl.addEventListener('pointerup', () => { drag = null; });
+
+  document.getElementById('btnReset').addEventListener('click', reset);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+})();
+</script>
+</body>
+</html>

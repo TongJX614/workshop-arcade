@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>数字推盘 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;}
+  /* 棋盘：一块压了内框的纸板 */
+  .board{
+    position:relative;
+    width:min(100%, 420px);
+    aspect-ratio:1/1;
+    background:linear-gradient(160deg,#E9E1D0 0%,#E2D9C5 100%);
+    border:1px solid var(--line-2);
+    border-radius:1px;
+    box-shadow:
+      var(--sh-deep),
+      inset 0 0 0 1px rgba(255,255,255,.42),
+      inset 0 0 26px rgba(31,28,22,.06);
+  }
+  /* 内框细线：像版画的压印边 */
+  .board::before{
+    content:"";position:absolute;inset:6px;pointer-events:none;z-index:0;
+    border:1px solid rgba(31,28,22,.10);
+  }
+  /* 四角定位角标 */
+  .board::after{
+    content:"";position:absolute;inset:0;pointer-events:none;z-index:0;opacity:.5;
+    background:
+      linear-gradient(var(--line-2),var(--line-2)) left 2px top 2px/9px 1px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) left 2px top 2px/1px 9px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) right 2px top 2px/9px 1px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) right 2px top 2px/1px 9px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) left 2px bottom 2px/9px 1px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) left 2px bottom 2px/1px 9px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) right 2px bottom 2px/9px 1px no-repeat,
+      linear-gradient(var(--line-2),var(--line-2)) right 2px bottom 2px/1px 9px no-repeat;
+  }
+  /* 瓦片：一张压过边的卡纸，按下会陷进板里 */
+  .tile{
+    position:absolute;top:0;left:0;
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--serif);font-variant-numeric:tabular-nums;
+    background:linear-gradient(180deg,#FFFDF7 0%,#F7F2E6 100%);
+    border:1px solid rgba(31,28,22,.18);
+    color:var(--ink);
+    cursor:pointer;
+    border-radius:1px;
+    box-shadow:
+      0 1px 0 rgba(31,28,22,.16),
+      0 2px 3px -2px rgba(31,28,22,.35),
+      inset 0 1px 0 rgba(255,255,255,.9);
+    transition:transform .17s cubic-bezier(.2,.9,.28,1),color .2s,background .2s,box-shadow .17s;
+    will-change:transform;
+    user-select:none;
+    z-index:1;
+  }
+  .tile::before{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(255,255,255,.6),rgba(255,255,255,0) 42%);
+  }
+  .tile span{position:relative;z-index:1;letter-spacing:.02em}
+  /* 已归位：字转朱红，并在左上角点一颗小印 */
+  .tile.home{color:var(--accent)}
+  .tile.home::after{
+    content:"";position:absolute;left:5px;top:5px;width:4px;height:4px;
+    background:var(--accent);opacity:.55;
+  }
+  .tile.moving{transition:transform .17s cubic-bezier(.2,.9,.28,1)}
+  .tile.hit{animation:tap .2s ease-out}
+  @keyframes tap{0%{transform-origin:center}0%{box-shadow:inset 0 2px 6px rgba(31,28,22,.25)}100%{box-shadow:0 1px 0 rgba(31,28,22,.16),inset 0 1px 0 rgba(255,255,255,.9)}}
+  .board.won .tile{background:linear-gradient(180deg,#FFFEF9 0%,#FAF5E9 100%)}
+  .board.won .tile.home{background:linear-gradient(180deg,#FFF9F3 0%,#FBEEDF 100%);border-color:rgba(180,64,44,.34)}
+  .plinth b{color:var(--accent)}
+  .emptyhint{
+    position:absolute;top:0;left:0;pointer-events:none;border-radius:1px;
+    background:repeating-linear-gradient(45deg,rgba(31,28,22,.06) 0 2px,transparent 2px 6px);
+    box-shadow:inset 0 0 14px rgba(31,28,22,.12);
+    transition:transform .17s cubic-bezier(.2,.9,.28,1);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">II · Sliding Puzzle</div>
+      <h1>数字推盘</h1>
+    </div>
+    <div class="bar__meta">步数 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span id="uiMeta">4 × 4 · 参考 60 步</span>
+      <span class="r" id="uiTime">0:00</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-n="3">3 × 3</button>
+      <button data-n="4">4 × 4</button>
+      <button data-n="5">5 × 5</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnShuffle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h4l9 10h5M3 17h4l2.2-2.4M18 4l3 3-3 3M18 14l3 3-3 3"/></svg>
+      重排
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音" aria-label="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, toast, plate, fmtTime, haptic } = Shell;
+
+  const board = document.getElementById('board');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiMeta = document.getElementById('uiMeta');
+  const uiTime = document.getElementById('uiTime');
+  const segSize = document.getElementById('segSize');
+  const btnSound = document.getElementById('btnSound');
+
+  const S = { n: 4, tiles: [], blank: 0, moves: 0, elapsed: 0, tick: 0, locked: false, els: [] };
+
+  function save(){ return Store.get('save.slide', {}) || {}; }
+
+  /* ---------------- 计时 ---------------- */
+  function stopTimer(){ clearInterval(S.tick); S.tick = 0; }
+  function startTimer(){
+    stopTimer();
+    S.tick = setInterval(() => {
+      if(document.hidden || S.locked) return;
+      S.elapsed++; uiTime.textContent = fmtTime(S.elapsed);
+    }, 1000);
+  }
+
+  /* ---------------- 生成 ---------------- */
+  function solved(){
+    const n = S.n, a = [];
+    for(let i = 1; i < n * n; i++) a.push(i);
+    a.push(0);
+    return a;
+  }
+  function shuffle(){
+    // 从终局随机走合法步，保证一定可解
+    const n = S.n;
+    S.tiles = solved();
+    S.blank = n * n - 1;
+    let last = -1;
+    const steps = n * n * 40;
+    for(let k = 0; k < steps; k++){
+      const mv = neighbors(S.blank).filter(x => x !== last);
+      const pick = mv[(Math.random() * mv.length) | 0];
+      last = S.blank;
+      S.tiles[S.blank] = S.tiles[pick];
+      S.tiles[pick] = 0;
+      S.blank = pick;
+    }
+    if(isSolved()) return shuffle();
+  }
+  function neighbors(i){
+    const n = S.n, r = (i / n) | 0, c = i % n, out = [];
+    if(r > 0) out.push(i - n);
+    if(r < n - 1) out.push(i + n);
+    if(c > 0) out.push(i - 1);
+    if(c < n - 1) out.push(i + 1);
+    return out;
+  }
+  function isSolved(){
+    for(let i = 0; i < S.tiles.length - 1; i++) if(S.tiles[i] !== i + 1) return false;
+    return S.tiles[S.tiles.length - 1] === 0;
+  }
+
+  /* ---------------- 渲染 ---------------- */
+  function render(){
+    board.innerHTML = '';
+    S.els = [];
+    const n = S.n;
+    const size = 100 / n;
+    for(let i = 0; i < n * n; i++){
+      const v = S.tiles[i];
+      if(!v) continue;
+      const el = document.createElement('div');
+      el.className = 'tile' + (v === i + 1 ? ' home' : '');
+      el.style.width = size + '%';
+      el.style.height = size + '%';
+      const r = (i / n) | 0, c = i % n;
+      el.style.transform = 'translate(' + (c * 100) + '%,' + (r * 100) + '%)';
+
+      el.innerHTML = '<span>' + v + '</span>';
+      el.dataset.v = v;
+      el.addEventListener('click', () => tap(v));
+      board.appendChild(el);
+      S.els[v] = el;
+    }
+    // 空格：一块压了斜纹的凹槽，跟着空位一起滑
+    const hint = document.createElement('div');
+    hint.className = 'emptyhint';
+    hint.style.width = size + '%';
+    hint.style.height = size + '%';
+    hint.style.transform = 'translate(' + ((S.blank % n) * 100) + '%,' + (((S.blank / n) | 0) * 100) + '%)';
+    board.appendChild(hint);
+    S.hint = hint;
+    fitFont();
+    updateHud();
+  }
+  function fitFont(){
+    board.style.fontSize = (board.clientWidth / S.n * 0.34) + 'px';
+  }
+  function updateHud(){
+    uiMoves.textContent = S.moves;
+    uiMeta.innerHTML = S.n + ' × ' + S.n + ' · 已归位 <b>' + S.tiles.filter((v, i) => v && v === i + 1).length + '</b> / ' + (S.n * S.n - 1);
+  }
+
+  /* ---------------- 移动 ---------------- */
+  function tap(v){
+    if(S.locked) return;
+    const idx = S.tiles.indexOf(v);
+    if(idx < 0) return;
+    if(neighbors(S.blank).indexOf(idx) < 0) return;
+    slide(idx);
+  }
+  function slide(idx){
+    const el = S.els[S.tiles[idx]];
+    const n = S.n;
+    const fromR = (idx / n) | 0, fromC = idx % n;
+    S.tiles[S.blank] = S.tiles[idx];
+    S.tiles[idx] = 0;
+    const prevBlank = S.blank;
+    S.blank = idx;
+    const r = (prevBlank / n) | 0, c = prevBlank % n;
+    if(el){
+      el.style.transform = 'translate(' + (c * 100) + '%,' + (r * 100) + '%)';
+      el.classList.toggle('home', S.tiles[prevBlank] === prevBlank + 1);
+    }
+    if(S.hint){
+      S.hint.style.transform = 'translate(' + (c * 100) + '%,' + (r * 100) + '%)';
+    }
+    S.moves++;
+    Shell.bump(uiMoves);
+    Sound.tone(300 + prevBlank * 3, .05, 'sine', .05);
+    haptic(6);
+    updateHud();
+    if(isSolved()) win();
+  }
+  function moveByDir(dir){
+    if(S.locked) return;
+    const n = S.n;
+    const br = (S.blank / n) | 0, bc = S.blank % n;
+    let target = -1;
+    if(dir === 'up' && br < n - 1) target = S.blank + n;      // 空格上方有块 → 往下滑
+    if(dir === 'down' && br > 0) target = S.blank - n;
+    if(dir === 'left' && bc < n - 1) target = S.blank + 1;
+    if(dir === 'right' && bc > 0) target = S.blank - 1;
+    if(target >= 0) slide(target);
+  }
+
+  /* ---------------- 胜利 ---------------- */
+  function win(){
+    S.locked = true;
+    stopTimer();
+    board.classList.add('won');
+    Shell.flash(board);
+    const n = S.n;
+    const s = save();
+    if(!s.best){ s.best = {}; }
+    if(typeof s.best === 'number') s.best = {};   // 兼容旧档
+    const prev = s.best[n];
+    s.best[n] = prev ? Math.min(prev, S.moves) : S.moves;
+    s.size = n;
+    s.plays = (s.plays || 0) + 1;
+    // 面板显示当前尺寸的最好成绩
+    s.flatBest = s.best[n];
+    Store.set('save.slide', s);
+    Sound.win();
+    const stars = S.moves <= n * n * 2 ? 3 : S.moves <= n * n * 3.2 ? 2 : 1;
+    plate({
+      kicker: 'SOLVED · ' + n + '×' + n,
+      title: S.moves === prev ? '刷新最快' : '归位完成',
+      sub: S.moves + ' 步 · ' + fmtTime(S.elapsed) + (prev ? ' · 之前最好 ' + prev + ' 步' : ''),
+      stars: stars,
+      buttons: [
+        { label: '再来一局', kind: 'ink', onClick: () => newGame() },
+        { label: '返回目录', onClick: () => Shell.back('../index.html') }
+      ]
+    });
+  }
+
+  /* ---------------- 开局 ---------------- */
+  function newGame(){
+    S.moves = 0;
+    S.elapsed = 0;
+    S.locked = false;
+    uiTime.textContent = '0:00';
+    shuffle();
+    render();
+    startTimer();
+    const s = save();
+    s.size = S.n;
+    Store.set('save.slide', s);
+  }
+
+  function setSize(n){
+    S.n = n;
+    Array.prototype.forEach.call(segSize.children, b => {
+      b.setAttribute('aria-pressed', String(+b.dataset.n === n));
+    });
+    newGame();
+  }
+
+  /* ---------------- 事件 ---------------- */
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => setSize(+b.dataset.n));
+  });
+  document.getElementById('btnShuffle').addEventListener('click', () => {
+    if(S.locked) S.locked = false;
+    newGame();
+  });
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  window.addEventListener('resize', fitFont);
+  document.addEventListener('keydown', e => {
+    const map = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
+    if(map[e.key]){ e.preventDefault(); moveByDir(map[e.key]); }
+  });
+  Shell.swipe(board, moveByDir);
+
+  const s0 = save();
+  S.n = s0.size || 4;
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

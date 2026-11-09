@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>汉诺塔 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;gap:10px}
+  .towers{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(6px,2.4vw,16px);
+    width:min(100%,480px);align-items:end;
+  }
+  .tower{
+    position:relative;display:flex;flex-direction:column-reverse;align-items:center;
+    height:min(52vh,340px);padding:0 2px 13px;cursor:pointer;border:0;background:transparent;
+    justify-content:flex-start;
+  }
+  /* 木柱 */
+  .tower::before{
+    content:"";position:absolute;left:50%;bottom:8px;width:5px;height:78%;
+    transform:translateX(-50%);border-radius:2px 2px 0 0;
+    background:linear-gradient(90deg,#8C7A55 0%,#C9B78D 34%,#A08E67 72%,#7E6C4A 100%);
+    box-shadow:0 1px 0 rgba(255,255,255,.4),inset -1px 0 0 rgba(31,28,22,.18);
+  }
+  /* 底座 */
+  .tower::after{
+    content:"";position:absolute;left:2px;right:2px;bottom:0;height:9px;
+    background:linear-gradient(180deg,#C9B78D,#8C7A55);
+    border-radius:1px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 2px 3px -2px rgba(31,28,22,.7);
+  }
+  .tower.sel::before{background:linear-gradient(90deg,#A8503C,#D97456 40%,#B4402C)}
+  .tower.sel::after{background:linear-gradient(180deg,#D97456,#A8503C)}
+  .disk{
+    position:relative;z-index:1;height:clamp(16px,3.4vh,24px);margin-bottom:3px;
+    border-radius:2px;display:grid;place-items:center;
+    font-family:var(--serif);font-size:10px;letter-spacing:.1em;color:rgba(255,255,255,.9);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.45),inset 0 -2px 0 rgba(31,28,22,.22),
+               0 2px 3px -1px rgba(31,28,22,.35);
+    transition:transform .22s var(--ease),box-shadow .2s;
+    background:linear-gradient(180deg,#D9C6A0,#B9A47A);
+  }
+  .disk.up{
+    transform:translateY(-10px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 8px 12px -8px rgba(31,28,22,.9);
+  }
+  .tower:active .disk.up{transform:translateY(-14px)}
+  .legend{
+    display:flex;gap:14px;justify-content:center;
+    font-family:var(--serif);font-size:10px;letter-spacing:.16em;color:var(--ink-3);
+  }
+  .legend i{font-style:normal;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XIII · Tower of Hanoi</div>
+      <h1>汉诺塔</h1>
+    </div>
+    <div class="bar__meta">步 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="towers" id="towers"></div>
+    <div class="plinth">
+      <span>盘 <b id="uiN">4</b> 片 · 最少 <span id="uiMin">15</span> 步</span>
+      <span class="r" id="uiBest">最佳 —</span>
+    </div>
+    <div class="legend"><span>点柱子：<i>拿起</i> 顶上那一片</span><span>再点另一根：<i>放下</i></span></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segN">
+      <button data-n="3">3 片</button>
+      <button data-n="4">4 片</button>
+      <button data-n="5">5 片</button>
+      <button data-n="6">6 片</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      重来
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const towersEl = document.getElementById('towers');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiN = document.getElementById('uiN');
+  const uiMin = document.getElementById('uiMin');
+  const uiBest = document.getElementById('uiBest');
+  const segN = document.getElementById('segN');
+
+  const S = { n: 4, pegs: [[], [], []], sel: -1, moves: 0, done: false, busy: false };
+
+  // 从深到浅的六种木色
+  const WOOD = [
+    ['#8E7A54', '#6D5C3C'],
+    ['#B4402C', '#8A2F1E'],
+    ['#A98C4E', '#836A36'],
+    ['#5F7A6A', '#455C4E'],
+    ['#7A6A92', '#584A6E'],
+    ['#B0793F', '#8A5B2C']
+  ];
+
+  function save(){ return Store.get('save.hanoi', {}) || {}; }
+  const minMoves = n => Math.pow(2, n) - 1;
+
+  function build(){
+    towersEl.innerHTML = '';
+    S.pegs.forEach((peg, i) => {
+      const t = document.createElement('button');
+      t.className = 'tower';
+      t.dataset.i = i;
+      S.pegs[i].forEach((d, j) => {
+        t.appendChild(makeDisk(d, j));
+      });
+      t.addEventListener('click', () => tap(i));
+      towersEl.appendChild(t);
+    });
+    paint();
+  }
+
+  function makeDisk(d, depth){
+    const el = document.createElement('div');
+    el.className = 'disk';
+    const w = 34 + (d / S.n) * 62;
+    el.style.width = w + '%';
+    const col = WOOD[(d - 1) % WOOD.length];
+    el.style.background = 'linear-gradient(180deg,' + col[0] + ',' + col[1] + ')';
+    el.textContent = d;
+    return el;
+  }
+
+  function paint(){
+    Array.prototype.forEach.call(towersEl.children, (t, i) => {
+      t.innerHTML = '';
+      S.pegs[i].forEach(d => t.appendChild(makeDisk(d, 0)));
+      t.classList.toggle('sel', S.sel === i);
+    });
+    // 选中的柱顶那一片抬起来
+    if(S.sel >= 0){
+      const t = towersEl.children[S.sel];
+      const top = t.lastElementChild;
+      if(top) top.classList.add('up');
+    }
+    uiMoves.textContent = S.moves;
+    uiN.textContent = S.n;
+    uiMin.textContent = minMoves(S.n);
+    const sv = save();
+    const best = sv['best' + S.n];
+    uiBest.textContent = '最佳 ' + (best ? best + ' 步' : '—');
+    Shell.bump(uiMoves);
+  }
+
+  function canPlace(d, peg){
+    const top = S.pegs[peg][S.pegs[peg].length - 1];
+    return top == null || top > d;
+  }
+
+  function tap(i){
+    if(S.done || S.busy) return;
+    if(S.sel < 0){
+      if(!S.pegs[i].length){ Sound.bad(); Shell.toast('这根是空的'); return; }
+      S.sel = i;
+      Sound.tone(420, .07, 'triangle', .09);
+      haptic(8);
+      paint();
+      return;
+    }
+    if(S.sel === i){ S.sel = -1; Sound.tone(300, .05, 'sine', .05); paint(); return; }
+
+    const from = S.sel;
+    const d = S.pegs[from][S.pegs[from].length - 1];
+    if(!canPlace(d, i)){
+      Sound.bad(); haptic([8, 40, 8]);
+      Shell.toast('大的不能压在小的上面');
+      S.sel = -1;
+      paint();
+      return;
+    }
+    S.pegs[from].pop();
+    S.pegs[i].push(d);
+    S.moves++;
+    S.sel = -1;
+    Sound.drop(d);
+    haptic(9);
+    paint();
+    if(S.pegs[2].length === S.n) win();
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(towersEl, 420);
+    const sv = save();
+    const key = 'best' + S.n;
+    const good = !sv[key] || S.moves < sv[key];
+    if(good) sv[key] = S.moves;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.hanoi', sv);
+    const perfect = S.moves === minMoves(S.n);
+    setTimeout(() => {
+      plate({
+        kicker: perfect ? 'PERFECT' : 'STACKED',
+        title: perfect ? '一步不多' : '全部搬完',
+        sub: S.n + ' 片 · ' + S.moves + ' 步 · 最少 ' + minMoves(S.n) + ' 步',
+        stars: perfect ? 3 : S.moves <= minMoves(S.n) * 1.5 ? 2 : 1,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 420);
+  }
+
+  function newGame(){
+    S.pegs = [[], [], []];
+    for(let d = S.n; d >= 1; d--) S.pegs[0].push(d);
+    S.sel = -1; S.moves = 0; S.done = false;
+    build();
+  }
+
+  Array.prototype.forEach.call(segN.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segN.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.hanoi', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = Math.min(6, Math.max(3, (save().n | 0) || 4));
+  Array.prototype.forEach.call(segN.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

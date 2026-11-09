@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>破译 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 30px;gap:12px}
+  .rows{
+    width:min(100%,420px);display:flex;flex-direction:column;gap:4px;
+  }
+  .row{
+    display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;
+    padding:4px 8px;border:1px solid transparent;border-radius:2px;
+    transition:background .16s,border-color .16s;
+  }
+  .row.cur{border-color:var(--line-2);background:var(--paper-hi);box-shadow:var(--sh-lift)}
+  .row.no{opacity:.55}
+  .idx{
+    font-family:var(--serif);font-size:8.5px;letter-spacing:.14em;color:var(--ink-3);
+    width:14px;text-align:right;font-variant-numeric:tabular-nums;
+  }
+  .pegs{display:flex;gap:4px}
+  .peg{
+    width:clamp(20px,5.6vw,26px);aspect-ratio:1/1;border-radius:50%;
+    border:1px solid rgba(31,28,22,.22);background:rgba(31,28,22,.035);
+    box-shadow:inset 0 1px 2px rgba(31,28,22,.10);
+    cursor:pointer;position:relative;padding:0;appearance:none;
+  }
+  .peg.filled{border-color:rgba(0,0,0,.2);box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 1px 2px rgba(31,28,22,.28)}
+  .peg.pop{animation:pop .22s var(--ease)}
+  @keyframes pop{from{transform:scale(.6)}to{transform:none}}
+  .fb{display:grid;grid-template-columns:1fr 1fr;gap:2px;width:22px;height:22px}
+  .fb i{
+    width:9px;height:9px;border-radius:50%;background:rgba(31,28,22,.08);
+    border:1px solid rgba(31,28,22,.10);
+  }
+  .fb i.b{background:#1F1C16;border-color:#1F1C16}
+  .fb i.w{background:var(--paper-hi);border-color:var(--ink-2);box-shadow:inset 0 0 0 1px rgba(255,255,255,.9)}
+  .palette{
+    display:flex;gap:8px;justify-content:center;flex-wrap:wrap;
+  }
+  .sw{
+    width:clamp(38px,10vw,46px);aspect-ratio:1/1;border-radius:50%;border:1px solid rgba(0,0,0,.22);
+    cursor:pointer;appearance:none;padding:0;position:relative;
+    box-shadow:inset 0 2px 0 rgba(255,255,255,.3),0 2px 4px -2px rgba(31,28,22,.6);
+    transition:transform .12s var(--ease);
+  }
+  .sw:active{transform:scale(.93)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXIX · Mastermind</div>
+      <h1>破译</h1>
+    </div>
+    <div class="bar__meta">剩 <b id="uiLeft">10</b> 次</div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="rows" id="rows"></div>
+    <div class="plinth">
+      <span>四色密码 · <b id="uiState">填四个色再提交</b></span>
+      <span class="r" id="uiBest">—</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="palette" id="palette"></div>
+  </div>
+  <div class="controls" style="margin-top:8px">
+    <button class="btn btn--ink" id="btnSubmit">提交</button>
+    <button class="btn" id="btnClear">清空</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const rowsEl = document.getElementById('rows');
+  const paletteEl = document.getElementById('palette');
+  const uiLeft = document.getElementById('uiLeft');
+  const uiState = document.getElementById('uiState');
+  const uiBest = document.getElementById('uiBest');
+
+  const COLORS = [
+    { bg: '#B4402C', name: '朱' },
+    { bg: '#2A241C', name: '墨' },
+    { bg: '#D3AC62', name: '金' },
+    { bg: '#4E7FB8', name: '蓝' },
+    { bg: '#5F8A6E', name: '绿' },
+    { bg: '#7A6A92', name: '紫' }
+  ];
+  const SLOTS = 4, TRIES = 10;
+
+  const S = { ans: [], guesses: [], cur: [], row: 0, done: false, sel: -1 };
+
+  function save(){ return Store.get('save.mastermind', {}) || {}; }
+
+  function score(guess, ans){
+    const g = guess.slice(), a = ans.slice();
+    let black = 0, white = 0;
+    for(let i = 0; i < SLOTS; i++){
+      if(g[i] === a[i] && g[i] >= 0){ black++; g[i] = -1; a[i] = -1; }
+    }
+    for(let i = 0; i < SLOTS; i++){
+      if(g[i] < 0) continue;
+      const j = a.indexOf(g[i]);
+      if(j >= 0){ white++; a[j] = -1; }
+    }
+    return { black, white };
+  }
+
+  function newAns(){
+    S.ans = [];
+    for(let i = 0; i < SLOTS; i++) S.ans.push(Shell.rand(COLORS.length));
+  }
+
+  function build(){
+    rowsEl.innerHTML = '';
+    for(let r = 0; r < TRIES; r++){
+      const row = document.createElement('div');
+      row.className = 'row';
+      const idx = document.createElement('span');
+      idx.className = 'idx';
+      idx.textContent = String(r + 1);
+      const pegs = document.createElement('div');
+      pegs.className = 'pegs';
+      for(let i = 0; i < SLOTS; i++){
+        const p = document.createElement('button');
+        p.className = 'peg';
+        p.dataset.i = i;
+        p.addEventListener('click', () => clearSlot(r, i));
+        pegs.appendChild(p);
+      }
+      const fb = document.createElement('div');
+      fb.className = 'fb';
+      fb.innerHTML = '<i></i><i></i><i></i><i></i>';
+      row.appendChild(idx);
+      row.appendChild(pegs);
+      row.appendChild(fb);
+      rowsEl.appendChild(row);
+    }
+  }
+
+  function paint(){
+    Array.prototype.forEach.call(rowsEl.children, (row, r) => {
+      row.className = 'row' + (r === S.row && !S.done ? ' cur' : '') + (r < S.row ? ' no' : '');
+      const pegs = row.querySelectorAll('.peg');
+      const fb = row.querySelectorAll('.fb i');
+      const rec = S.guesses[r];
+      for(let i = 0; i < SLOTS; i++){
+        if(r < S.row && rec){
+          const v = rec.g[i];
+          pegs[i].className = 'peg filled';
+          pegs[i].style.background = v >= 0 ? COLORS[v].bg : 'transparent';
+        }else if(r === S.row && !S.done){
+          const v = S.cur[i];
+          pegs[i].className = 'peg' + (v != null && v >= 0 ? ' filled' : '');
+          pegs[i].style.background = v != null && v >= 0 ? COLORS[v].bg : '';
+        }else{
+          pegs[i].className = 'peg';
+          pegs[i].style.background = '';
+        }
+      }
+      for(let i = 0; i < 4; i++) fb[i].className = '';
+      if(rec){
+        // 先黑后白
+        let k = 0;
+        for(let i = 0; i < rec.black; i++) fb[k++].className = 'b';
+        for(let i = 0; i < rec.white; i++) fb[k++].className = 'w';
+      }
+    });
+    uiLeft.textContent = Math.max(0, TRIES - S.row);
+  }
+
+  function fill(ci){
+    if(S.done) return;
+    const i = S.cur.findIndex(v => v == null || v < 0);
+    if(i < 0){ Shell.toast('这一行已经满了'); return; }
+    S.cur[i] = ci;
+    Sound.tone(420 + ci * 60, .05, 'triangle', .07);
+    haptic(5);
+    paint();
+    const p = rowsEl.children[S.row].querySelectorAll('.peg')[i];
+    p.classList.remove('pop'); void p.offsetWidth; p.classList.add('pop');
+  }
+
+  function clearSlot(r, i){
+    if(S.done || r !== S.row) return;
+    S.cur[i] = -1;
+    Sound.tone(300, .04, 'sine', .04);
+    paint();
+  }
+
+  function submit(){
+    if(S.done) return;
+    if(S.cur.filter(v => v != null && v >= 0).length < SLOTS){
+      Shell.toast('四个位置都要填满');
+      Sound.bad();
+      return;
+    }
+    const g = S.cur.slice();
+    const sc = score(g, S.ans);
+    S.guesses[S.row] = { g, black: sc.black, white: sc.white };
+    S.row++;
+    S.cur = [-1, -1, -1, -1];
+    Sound.drop(sc.black);
+    haptic(sc.black ? [8, 20, 8] : 7);
+    paint();
+
+    if(sc.black === SLOTS){ win(); return; }
+    if(S.row >= TRIES){ lose(); return; }
+    uiState.textContent = sc.black + ' 黑 ' + sc.white + ' 白';
+  }
+
+  function win(){
+    S.done = true;
+    uiState.textContent = '破译成功';
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(rowsEl, 460);
+    const sv = save();
+    const used = S.row;
+    const good = !sv.best || used < sv.best;
+    if(good) sv.best = used;
+    sv.plays = (sv.plays || 0) + 1;
+    sv.wins = (sv.wins || 0) + 1;
+    Store.set('save.mastermind', sv);
+    uiBest.textContent = '最少 ' + sv.best + ' 次';
+    setTimeout(() => {
+      plate({
+        kicker: 'CRACKED',
+        title: '密码破译',
+        sub: '用了 ' + used + ' 次 · 最少 ' + sv.best + ' 次',
+        stars: used <= 3 ? 3 : used <= 5 ? 2 : 1,
+        buttons: [
+          { label: '换一组', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function lose(){
+    S.done = true;
+    uiState.textContent = '没破出来';
+    Sound.lose();
+    haptic([14, 40]);
+    const sv = save();
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.mastermind', sv);
+    const names = S.ans.map(i => COLORS[i].name).join(' ');
+    setTimeout(() => {
+      plate({
+        kicker: 'LOCKED OUT',
+        title: '没破出来',
+        sub: '答案是 ' + names,
+        buttons: [
+          { label: '换一组', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function newGame(){
+    S.cur = [-1, -1, -1, -1];
+    S.guesses = [];
+    S.row = 0;
+    S.done = false;
+    uiState.textContent = '填四个色再提交';
+    newAns();
+    build();
+    paint();
+  }
+
+  function buildPalette(){
+    paletteEl.innerHTML = '';
+    COLORS.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.className = 'sw';
+      b.style.background = c.bg;
+      b.setAttribute('aria-label', c.name);
+      b.title = c.name;
+      b.addEventListener('click', () => fill(i));
+      paletteEl.appendChild(b);
+    });
+  }
+
+  document.getElementById('btnSubmit').addEventListener('click', submit);
+  document.getElementById('btnClear').addEventListener('click', () => {
+    if(S.done) return;
+    S.cur = [-1, -1, -1, -1];
+    paint();
+  });
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  document.addEventListener('keydown', e => {
+    if(e.key >= '1' && e.key <= '6') fill(+e.key - 1);
+    if(e.key === 'Enter') submit();
+    if(e.key === 'Backspace'){
+      const i = S.cur.map((v, k) => v >= 0 ? k : -1).filter(k => k >= 0).pop();
+      if(i != null) clearSlot(S.row, i);
+    }
+  });
+
+  buildPalette();
+  newGame();
+  const sv0 = save();
+  uiBest.textContent = sv0.best ? '最少 ' + sv0.best + ' 次' : '—';
+})();
+</script>
+</body>
+</html>

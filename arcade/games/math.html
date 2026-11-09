@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>心算冲刺 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:16px}
+  .qcard{
+    width:min(100%,420px);min-height:150px;
+    display:grid;place-items:center;position:relative;
+    background:var(--paper-hi);border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);
+    padding:20px;
+  }
+  .qcard::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:9px;
+    background-image:radial-gradient(circle at 5px 4px,rgba(31,28,22,.18) 1.5px,transparent 1.7px);
+    background-size:10px 10px;
+    border-bottom:1px dashed rgba(31,28,22,.16);
+  }
+  .q{
+    font-family:var(--serif);font-size:clamp(34px,10vw,48px);letter-spacing:.06em;
+    font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:10px;
+  }
+  .q .eq{color:var(--ink-3);font-size:.62em}
+  .q .ans{color:var(--accent);min-width:1.4em;text-align:center;border-bottom:2px solid var(--accent)}
+  .q .ans.blank{color:transparent;border-bottom-color:var(--line-2)}
+  .qcard.right{animation:okFlash .4s ease}
+  .qcard.wrong{animation:shake .34s ease}
+  @keyframes okFlash{0%{background:#F7EDE7}100%{background:var(--paper-hi)}}
+  @keyframes shake{0%,100%{transform:none}22%{transform:translateX(-6px)}66%{transform:translateX(6px)}}
+  .opts{display:grid;grid-template-columns:1fr 1fr;gap:10px;width:min(100%,420px)}
+  .opt{
+    appearance:none;height:clamp(56px,15vw,68px);cursor:pointer;
+    border:1px solid var(--line-2);background:var(--paper-hi);
+    font-family:var(--serif);font-size:clamp(20px,6vw,26px);
+    font-variant-numeric:tabular-nums;color:var(--ink);border-radius:2px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 2px 0 rgba(31,28,22,.06);
+    transition:background .13s,transform .1s,color .13s,border-color .13s;
+  }
+  .opt:hover{background:rgba(31,28,22,.045)}
+  .opt:active{transform:translateY(2px);box-shadow:var(--sh-press)}
+  .opt.ok{background:#2A241C;color:#FBF8F1;border-color:#2A241C}
+  .opt.bad{background:#F3DCD4;border-color:var(--accent);color:var(--accent)}
+  .opt[disabled]{cursor:default}
+  .hud{display:flex;align-items:baseline;gap:18px;font-family:var(--serif);font-size:10px;letter-spacing:.18em;color:var(--ink-3)}
+  .hud b{font-size:18px;color:var(--ink);font-weight:400;font-variant-numeric:tabular-nums}
+  .hud .t{color:var(--accent)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXV · Quick Math</div>
+      <h1>心算冲刺</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="hud"><span>答对 <b id="uiScore2">0</b></span><span>连击 <b id="uiCombo">0</b></span><span>剩余 <b class="t" id="uiTime">60</b> 秒</span></div>
+    <div class="qcard" id="qcard">
+      <div class="q" id="q"><span>准备好了吗</span></div>
+    </div>
+    <div class="opts" id="opts"></div>
+    <div class="plinth">
+      <span>六十秒，越快越难</span>
+      <span class="r" id="uiBest">最高 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const qEl = document.getElementById('q');
+  const qcard = document.getElementById('qcard');
+  const optsEl = document.getElementById('opts');
+  const uiScore = document.getElementById('uiScore');
+  const uiScore2 = document.getElementById('uiScore2');
+  const uiCombo = document.getElementById('uiCombo');
+  const uiTime = document.getElementById('uiTime');
+  const uiBest = document.getElementById('uiBest');
+
+  const DURATION = 60;
+  const S = { score: 0, combo: 0, best: 0, time: DURATION, running: false, answer: 0, locked: false, tick: 0 };
+
+  function save(){ return Store.get('save.math', {}) || {}; }
+
+  function makeQ(){
+    const lv = Math.min(4, Math.floor(S.score / 6));
+    let a, b, op, ans;
+    const r = Math.random();
+    if(lv === 0){
+      op = r < .5 ? '+' : '-';
+      a = 2 + Shell.rand(19); b = 2 + Shell.rand(19);
+      if(op === '-' && b > a){ const t = a; a = b; b = t; }
+    }else if(lv === 1){
+      op = r < .45 ? '+' : r < .8 ? '-' : '×';
+      a = 6 + Shell.rand(40); b = 3 + Shell.rand(30);
+      if(op === '-' && b > a){ const t = a; a = b; b = t; }
+      if(op === '×'){ a = 2 + Shell.rand(9); b = 2 + Shell.rand(9); }
+    }else if(lv === 2){
+      op = r < .35 ? '+' : r < .65 ? '×' : r < .85 ? '-' : '÷';
+      a = 12 + Shell.rand(60); b = 3 + Shell.rand(40);
+      if(op === '×'){ a = 3 + Shell.rand(11); b = 3 + Shell.rand(11); }
+      if(op === '÷'){ b = 2 + Shell.rand(9); a = b * (2 + Shell.rand(9)); }
+      if(op === '-' && b > a){ const t = a; a = b; b = t; }
+    }else{
+      op = r < .3 ? '×' : r < .55 ? '÷' : r < .78 ? '+' : '-';
+      a = 25 + Shell.rand(90); b = 6 + Shell.rand(60);
+      if(op === '×'){ a = 4 + Shell.rand(13); b = 4 + Shell.rand(13); }
+      if(op === '÷'){ b = 3 + Shell.rand(11); a = b * (3 + Shell.rand(12)); }
+      if(op === '-' && b > a){ const t = a; a = b; b = t; }
+    }
+    if(op === '+') ans = a + b;
+    else if(op === '-') ans = a - b;
+    else if(op === '×') ans = a * b;
+    else ans = a / b;
+    return { text: a + ' ' + op + ' ' + b, ans };
+  }
+
+  function ask(){
+    const q = makeQ();
+    S.answer = q.ans;
+    qEl.innerHTML = q.text + ' <span class="eq">=</span> <span class="ans blank">?</span>';
+    // 四个选项
+    const set = new Set([q.ans]);
+    let guard = 0;
+    while(set.size < 4 && guard++ < 240){
+      let v = q.ans + (Math.random() < .5 ? -1 : 1) * (1 + Shell.rand(Math.max(4, Math.round(Math.abs(q.ans) * .25) + 3)));
+      if(v !== q.ans && v >= 0) set.add(v);
+      else if(Math.random() < .12) set.add(q.ans + Shell.rand(12) - 6);
+    }
+    while(set.size < 4) set.add(q.ans + set.size + 1);
+    const opts = Shell.shuffle([...set]);
+    optsEl.innerHTML = '';
+    opts.forEach(v => {
+      const b = document.createElement('button');
+      b.className = 'opt';
+      b.textContent = v;
+      b.dataset.v = v;
+      b.addEventListener('click', () => answer(v, b));
+      optsEl.appendChild(b);
+    });
+    S.locked = false;
+    qcard.classList.remove('right', 'wrong');
+  }
+
+  function answer(v, btn){
+    if(!S.running || S.locked) return;
+    S.locked = true;
+    const ok = Math.round(v) === Math.round(S.answer);
+    if(ok){
+      S.score++;
+      S.combo++;
+      S.best = Math.max(S.best, S.combo);
+      btn.classList.add('ok');
+      qEl.querySelector('.ans').classList.remove('blank');
+      qEl.querySelector('.ans').textContent = S.answer;
+      qcard.classList.add('right');
+      Sound.tone(600 + Math.min(8, S.combo) * 40, .07, 'sine', .08);
+      haptic(6);
+      if(S.combo >= 3) Shell.floatNum(qcard, '×' + S.combo, '');
+    }else{
+      S.combo = 0;
+      btn.classList.add('bad');
+      qcard.classList.add('wrong');
+      Sound.bad();
+      haptic([10, 30]);
+      // 标出正确答案
+      Array.prototype.forEach.call(optsEl.children, o => {
+        if(+o.dataset.v === Math.round(S.answer)) o.classList.add('ok');
+      });
+    }
+    uiScore.textContent = S.score;
+    uiScore2.textContent = S.score;
+    uiCombo.textContent = S.combo;
+    Array.prototype.forEach.call(optsEl.children, o => { o.disabled = true; });
+    setTimeout(() => { if(S.running) ask(); }, ok ? 240 : 620);
+  }
+
+  function start(){
+    S.score = 0; S.combo = 0; S.best = 0; S.time = DURATION; S.running = true;
+    uiScore.textContent = '0'; uiScore2.textContent = '0'; uiCombo.textContent = '0';
+    uiTime.textContent = DURATION;
+    ask();
+    clearInterval(S.tick);
+    S.tick = setInterval(() => {
+      S.time--;
+      uiTime.textContent = Math.max(0, S.time);
+      if(S.time <= 0) end();
+    }, 1000);
+  }
+
+  function end(){
+    S.running = false;
+    clearInterval(S.tick);
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.math', sv);
+    uiBest.textContent = '最高 ' + (sv.best || S.score);
+    qEl.innerHTML = '<span>时间到</span>';
+    optsEl.innerHTML = '';
+    if(good && sv.plays > 1) Sound.win(); else Sound.done();
+    setTimeout(() => {
+      plate({
+        kicker: 'TIME UP',
+        title: good && sv.plays > 1 ? '刷新最高' : '六十秒到',
+        sub: '答对 ' + S.score + ' 题 · 最长连击 ' + S.best,
+        stars: S.score >= 40 ? 3 : S.score >= 25 ? 2 : S.score >= 12 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 460);
+  }
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  document.addEventListener('keydown', e => {
+    if(e.key >= '1' && e.key <= '4' && S.running){
+      const b = optsEl.children[+e.key - 1];
+      if(b && !b.disabled) b.click();
+    }
+    if(e.key === ' ' && !S.running){ e.preventDefault(); start(); }
+  });
+
+  uiBest.textContent = save().best ? '最高 ' + save().best : '—';
+})();
+</script>
+</body>
+</html>

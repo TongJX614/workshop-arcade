@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>扫雷 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;gap:12px}
+  .board{
+    display:grid;gap:1px;width:min(100%,440px);padding:5px;
+    background:rgba(31,28,22,.18);border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 0 1px rgba(255,255,255,.5);
+  }
+  .cell{
+    appearance:none;border:0;padding:0;aspect-ratio:1/1;cursor:pointer;
+    background:linear-gradient(180deg,#F8F3E7,#E7DECB);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9),inset 0 -1px 0 rgba(31,28,22,.11);
+    font-family:var(--serif);font-size:15px;font-weight:600;color:var(--ink);
+    display:grid;place-items:center;position:relative;
+    transition:background .13s,transform .07s;
+    font-variant-numeric:tabular-nums;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .cell:active{transform:scale(.96)}
+  .cell.open{
+    background:#EFE8D8;cursor:default;transform:none;
+    box-shadow:inset 0 0 0 1px rgba(31,28,22,.09);
+    animation:openIn .18s ease backwards;
+  }
+  @keyframes openIn{from{background:#E0D6C0}}
+  /* 旗：一枚朱红小签 */
+  .cell.flag::after{
+    content:"";width:30%;height:44%;background:var(--accent);
+    clip-path:polygon(0 0,100% 26%,0 58%,0 100%,18% 100%,18% 0);
+    box-shadow:0 1px 0 rgba(120,40,26,.3);
+  }
+  .cell.mine::after{
+    content:"";width:44%;height:44%;border-radius:50%;
+    background:radial-gradient(circle at 34% 30%,#7A3223,#241E18 72%);
+  }
+  .cell.mine{background:#F0DDD5}
+  .cell.boom{background:var(--accent)}
+  .cell.boom::after{background:radial-gradient(circle at 34% 30%,#FFF3EC,#8A2F1E 72%)}
+  .cell.wrong::after{content:"×";font-size:16px;color:var(--accent);width:auto;height:auto;background:none}
+  .cell.n1{color:#2F6AB5}.cell.n2{color:#3C7A46}.cell.n3{color:#B4402C}
+  .cell.n4{color:#5B4B8A}.cell.n5{color:#8A4B2C}.cell.n6{color:#2C7A78}
+  .cell.n7{color:#1F1C16}.cell.n8{color:#8B8271}
+  .hintline{
+    font-family:var(--serif);font-size:10px;letter-spacing:.16em;color:var(--ink-3);
+    text-align:center;line-height:1.7;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XI · Minesweeper</div>
+      <h1>扫雷</h1>
+    </div>
+    <div class="bar__meta">雷 <b id="uiLeft">10</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span>剩余雷 <b id="uiLeft2">10</b> · <span id="uiSize">8 × 8</span></span>
+      <span class="r" id="uiTime">00:00</span>
+    </div>
+    <div class="hintline">点开格子 · 长按或右键插旗</div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-k="0">8 × 8</button>
+      <button data-k="1">10 × 10</button>
+      <button data-k="2">12 × 12</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新局
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic, fmtTime } = Shell;
+
+  const LEVELS = [
+    { n: 8,  mines: 10 },
+    { n: 10, mines: 18 },
+    { n: 12, mines: 28 }
+  ];
+
+  const boardEl = document.getElementById('board');
+  const uiLeft = document.getElementById('uiLeft');
+  const uiLeft2 = document.getElementById('uiLeft2');
+  const uiSize = document.getElementById('uiSize');
+  const uiTime = document.getElementById('uiTime');
+  const segSize = document.getElementById('segSize');
+
+  const S = {
+    k: 0, n: 8, mines: 10,
+    g: [], els: [],
+    started: false, dead: false, won: false,
+    opened: 0, flags: 0, sec: 0, timer: 0
+  };
+
+  function save(){ return Store.get('save.mines', {}) || {}; }
+
+  const idx = (r, c) => r * S.n + c;
+
+  function makeGrid(safeR, safeC){
+    const total = S.n * S.n;
+    // 首点周围一圈也不放雷，保证开局能展开
+    const banned = new Set();
+    for(let dr = -1; dr <= 1; dr++) for(let dc = -1; dc <= 1; dc++){
+      const r = safeR + dr, c = safeC + dc;
+      if(r >= 0 && c >= 0 && r < S.n && c < S.n) banned.add(r * S.n + c);
+    }
+    const pool = [];
+    for(let i = 0; i < total; i++) if(!banned.has(i)) pool.push(i);
+    Shell.shuffle(pool);
+    const mineSet = new Set(pool.slice(0, Math.min(S.mines, pool.length)));
+    S.g = [];
+    for(let r = 0; r < S.n; r++){
+      const row = [];
+      for(let c = 0; c < S.n; c++){
+        row.push({ m: mineSet.has(r * S.n + c), o: false, f: false, v: 0 });
+      }
+      S.g.push(row);
+    }
+    for(let r = 0; r < S.n; r++) for(let c = 0; c < S.n; c++){
+      if(S.g[r][c].m){ S.g[r][c].v = 0; continue; }
+      let v = 0;
+      for(let dr = -1; dr <= 1; dr++) for(let dc = -1; dc <= 1; dc++){
+        if(!dr && !dc) continue;
+        const rr = r + dr, cc = c + dc;
+        if(rr >= 0 && cc >= 0 && rr < S.n && cc < S.n && S.g[rr][cc].m) v++;
+      }
+      S.g[r][c].v = v;
+    }
+  }
+
+  function build(){
+    boardEl.style.gridTemplateColumns = 'repeat(' + S.n + ', 1fr)';
+    boardEl.innerHTML = '';
+    S.els = [];
+    for(let r = 0; r < S.n; r++) for(let c = 0; c < S.n; c++){
+      const b = document.createElement('button');
+      b.className = 'cell';
+      b.dataset.r = r; b.dataset.c = c;
+      b.style.animation = 'openIn .22s ease backwards';
+      b.style.animationDelay = ((r + c) * 8) + 'ms';
+      bindCell(b, r, c);
+      boardEl.appendChild(b);
+      S.els.push(b);
+    }
+  }
+
+  function paintCell(r, c){
+    const cell = S.g[r][c], el = S.els[idx(r, c)];
+    el.className = 'cell';
+    el.textContent = '';
+    if(cell.o){
+      el.classList.add('open');
+      if(cell.m){ el.classList.add('mine'); }
+      else if(cell.v > 0){ el.textContent = cell.v; el.classList.add('n' + cell.v); }
+    }else if(cell.f){
+      el.classList.add('flag');
+    }
+  }
+
+  function paintAll(){
+    for(let r = 0; r < S.n; r++) for(let c = 0; c < S.n; c++) paintCell(r, c);
+    const left = S.mines - S.flags;
+    uiLeft.textContent = left;
+    uiLeft2.textContent = left;
+    uiSize.textContent = S.n + ' × ' + S.n;
+  }
+
+  function startTimer(){
+    if(S.timer) return;
+    S.timer = setInterval(() => {
+      S.sec++;
+      uiTime.textContent = fmtTime(S.sec);
+    }, 1000);
+  }
+  function stopTimer(){ clearInterval(S.timer); S.timer = 0; }
+
+  function openCell(r, c){
+    const cell = S.g[r][c];
+    if(cell.o || cell.f || S.dead || S.won) return;
+    if(!S.started){
+      S.started = true;
+      makeGrid(r, c);
+      paintAll();
+      startTimer();
+    }
+    if(cell.m){
+      cell.o = true;
+      boom(r, c);
+      return;
+    }
+    // 队列展开，避免递归过深
+    const q = [[r, c]];
+    while(q.length){
+      const [rr, cc] = q.pop();
+      const cur = S.g[rr][cc];
+      if(cur.o || cur.f) continue;
+      cur.o = true;
+      S.opened++;
+      paintCell(rr, cc);
+      if(cur.v === 0){
+        for(let dr = -1; dr <= 1; dr++) for(let dc = -1; dc <= 1; dc++){
+          if(!dr && !dc) continue;
+          const r2 = rr + dr, c2 = cc + dc;
+          if(r2 >= 0 && c2 >= 0 && r2 < S.n && c2 < S.n && !S.g[r2][c2].o && !S.g[r2][c2].f) q.push([r2, c2]);
+        }
+      }
+    }
+    Sound.tone(420 + Math.min(8, S.g[r][c].v) * 46, .05, 'sine', .06);
+    if(S.opened >= S.n * S.n - S.mines) win();
+  }
+
+  function toggleFlag(r, c){
+    const cell = S.g[r][c];
+    if(cell.o || S.dead || S.won) return;
+    cell.f = !cell.f;
+    S.flags += cell.f ? 1 : -1;
+    if(cell.f){ Sound.tone(620, .05, 'triangle', .08); haptic(8); }
+    else Sound.tone(300, .04, 'sine', .05);
+    paintCell(r, c);
+    const left = S.mines - S.flags;
+    uiLeft.textContent = left;
+    uiLeft2.textContent = left;
+  }
+
+  function boom(r, c){
+    S.dead = true;
+    stopTimer();
+    S.g[r][c].o = true;
+    paintCell(r, c);
+    S.els[idx(r, c)].classList.add('boom');
+    for(let rr = 0; rr < S.n; rr++) for(let cc = 0; cc < S.n; cc++){
+      const cell = S.g[rr][cc];
+      if(cell.m && !cell.o){ cell.o = true; paintCell(rr, cc); }
+      else if(!cell.m && cell.f){ paintCell(rr, cc); S.els[idx(rr, cc)].classList.add('wrong'); }
+    }
+    Sound.lose();
+    haptic([12, 40, 18]);
+    const sv = save();
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.mines', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'BOOM',
+        title: '踩到雷了',
+        sub: S.n + ' × ' + S.n + ' · ' + S.mines + ' 雷 · ' + fmtTime(S.sec),
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function win(){
+    S.won = true;
+    stopTimer();
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(boardEl, 420);
+    const sv = save();
+    const prev = sv['best' + S.n];
+    const good = !prev || S.sec < prev;
+    if(good) sv['best' + S.n] = S.sec;
+    sv.plays = (sv.plays || 0) + 1;
+    sv.wins = (sv.wins || 0) + 1;
+    Store.set('save.mines', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'CLEARED',
+        title: good && prev ? '刷新最快' : '全部扫清',
+        sub: S.n + ' × ' + S.n + ' · ' + fmtTime(S.sec) + (prev && !good ? ' · 最快 ' + fmtTime(prev) : ''),
+        stars: S.sec <= S.n * S.n * 0.45 ? 3 : S.sec <= S.n * S.n * 0.9 ? 2 : 1,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 460);
+  }
+
+  /* --------- 事件绑定：点击 / 长按插旗 / 右键 --------- */
+  function bindCell(b, r, c){
+    let holdT = 0, longPress = false;
+    b.addEventListener('pointerdown', e => {
+      if(e.button != null && e.button !== 0) return;
+      longPress = false;
+      holdT = setTimeout(() => { longPress = true; toggleFlag(r, c); haptic(12); }, 360);
+    });
+    const cancel = () => { clearTimeout(holdT); };
+    b.addEventListener('pointerup', cancel);
+    b.addEventListener('pointerleave', cancel);
+    b.addEventListener('pointercancel', cancel);
+    b.addEventListener('click', () => {
+      if(longPress){ longPress = false; return; }
+      openCell(r, c);
+    });
+    b.addEventListener('contextmenu', e => { e.preventDefault(); toggleFlag(r, c); });
+  }
+
+  function newGame(){
+    stopTimer();
+    const cfg = LEVELS[S.k];
+    S.n = cfg.n; S.mines = cfg.mines;
+    S.started = false; S.dead = false; S.won = false;
+    S.opened = 0; S.flags = 0; S.sec = 0;
+    uiTime.textContent = '00:00';
+    S.g = [];
+    for(let r = 0; r < S.n; r++){
+      const row = [];
+      for(let c = 0; c < S.n; c++) row.push({ m: false, o: false, f: false, v: 0 });
+      S.g.push(row);
+    }
+    build();
+    paintAll();
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.k = +b.dataset.k;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.k = S.k; Store.set('save.mines', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  const sv0 = save();
+  S.k = Math.min(2, Math.max(0, sv0.k | 0));
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.k === S.k));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

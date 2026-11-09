@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>接落物 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,420px);aspect-ratio:3/4;
+    background:linear-gradient(180deg,#FDFAF3,#EFE6D4);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.04);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXI · Catch</div>
+      <h1>接落物</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">左右拖动篮子<br>别让果子落地</div>
+    </div>
+    <div class="plinth">
+      <span>命 <b id="uiLives">3</b> · 接住 <b id="uiScore2">0</b></span>
+      <span class="r" id="uiBest">最高 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiScore2 = document.getElementById('uiScore2');
+  const uiLives = document.getElementById('uiLives');
+  const uiBest = document.getElementById('uiBest');
+
+  const W = 340, H = 450;
+  const BW = 72, BH = 34, BY = H - 58;
+
+  const S = {
+    bx: W / 2 - BW / 2, items: [], score: 0, lives: 3,
+    t: 0, spawn: 0.9, running: false, last: 0, keys: {}, done: false
+  };
+
+  function save(){ return Store.get('save.catch', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  function reset(){
+    S.items = []; S.score = 0; S.lives = 3; S.t = 0; S.spawn = 0.9;
+    S.bx = W / 2 - BW / 2;
+    S.done = false;
+    tip.classList.remove('hide');
+    hud();
+  }
+
+  function hud(){
+    uiScore.textContent = S.score;
+    uiScore2.textContent = S.score;
+    uiLives.textContent = S.lives;
+  }
+
+  function start(){
+    reset();
+    S.running = true;
+    tip.classList.add('hide');
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.034, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+    S.t += dt;
+
+    if(S.keys.left) S.bx -= 340 * dt;
+    if(S.keys.right) S.bx += 340 * dt;
+    S.bx = Math.max(4, Math.min(W - BW - 4, S.bx));
+
+    // 生成
+    S.spawn -= dt;
+    if(S.spawn <= 0){
+      const bomb = Math.random() < Math.min(0.26, 0.05 + S.t * 0.004);
+      S.items.push({
+        x: 24 + Math.random() * (W - 48),
+        y: -20,
+        vy: 110 + Math.random() * 60 + Math.min(160, S.t * 9),
+        vx: (Math.random() - .5) * 60,
+        bomb,
+        rot: Math.random() * 6
+      });
+      S.spawn = Math.max(0.30, 0.95 - S.t * 0.022) * (0.75 + Math.random() * 0.6);
+    }
+
+    // 更新
+    for(const it of S.items){
+      it.y += it.vy * dt;
+      it.x += it.vx * dt;
+      it.rot += dt * 3;
+      if(it.x < 12 || it.x > W - 12) it.vx *= -1;
+      // 接住
+      if(it.y > BY - 6 && it.y < BY + BH && it.x > S.bx - 4 && it.x < S.bx + BW + 4 && it.vy > 0){
+        it.dead = true;
+        if(it.bomb){
+          S.lives--;
+          Sound.bad();
+          haptic([14, 40]);
+          Shell.floatNum(frame, '−1', '');
+        }else{
+          S.score++;
+          Sound.pick(S.score);
+          haptic(6);
+          Shell.floatNum(frame, '+1', '');
+        }
+        hud();
+      }
+      // 落地
+      if(it.y > H + 20){
+        it.dead = true;
+        if(!it.bomb){
+          S.lives--;
+          Sound.bad();
+          hud();
+        }
+      }
+    }
+    S.items = S.items.filter(i => !i.dead);
+
+    if(S.lives <= 0){ over(); return; }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function over(){
+    S.running = false;
+    S.done = true;
+    Sound.lose();
+    haptic([14, 50, 18]);
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.catch', sv);
+    uiBest.textContent = '最高 ' + (sv.best || S.score);
+    setTimeout(() => {
+      plate({
+        kicker: 'BASKET DOWN',
+        title: good ? '刷新最高' : '接不住了',
+        sub: '接住 ' + S.score + ' 个 · 最高 ' + (sv.best || S.score),
+        stars: S.score >= 45 ? 3 : S.score >= 26 ? 2 : S.score >= 12 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+
+    // 背景：淡格线
+    ctx.strokeStyle = 'rgba(31,28,22,.045)';
+    ctx.lineWidth = 1;
+    for(let y = 0; y < H; y += 34){
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    // 果子
+    for(const it of S.items){
+      if(it.bomb){
+        ctx.save();
+        ctx.translate(it.x, it.y);
+        ctx.rotate(Math.sin(it.rot) * 0.16);
+        ctx.fillStyle = '#2A241C';
+        ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = 'rgba(180,64,44,.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, -11); ctx.quadraticCurveTo(6, -20, 1, -24); ctx.stroke();
+        ctx.fillStyle = 'rgba(180,64,44,.95)';
+        ctx.beginPath(); ctx.arc(1, -25, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.25)';
+        ctx.beginPath(); ctx.arc(-3, -4, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }else{
+        ctx.save();
+        ctx.translate(it.x, it.y);
+        ctx.rotate(Math.sin(it.rot) * 0.3);
+        const g = ctx.createRadialGradient(-3, -4, 2, 0, 0, 12);
+        g.addColorStop(0, '#D97656');
+        g.addColorStop(1, '#A5351F');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(0, 0, 11, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#5F7A4A';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, -11); ctx.lineTo(2, -17); ctx.stroke();
+        ctx.fillStyle = '#5F7A4A';
+        ctx.beginPath(); ctx.ellipse(6, -17, 5, 2.6, -0.5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // 篮子
+    const bx = S.bx, by = BY;
+    ctx.fillStyle = '#B98A4E';
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + BW, by);
+    ctx.lineTo(bx + BW - 9, by + BH);
+    ctx.lineTo(bx + 9, by + BH);
+    ctx.closePath();
+    ctx.fill();
+    // 编织纹
+    ctx.strokeStyle = 'rgba(31,28,22,.20)';
+    ctx.lineWidth = 1;
+    for(let i = 1; i < 4; i++){
+      const y = by + i * BH / 4;
+      ctx.beginPath(); ctx.moveTo(bx + i * 1.6, y); ctx.lineTo(bx + BW - i * 1.6, y); ctx.stroke();
+    }
+    for(let i = 1; i < 6; i++){
+      const x = bx + i * BW / 6;
+      ctx.beginPath(); ctx.moveTo(x, by); ctx.lineTo(x - (i - 3) * 1.5, by + BH); ctx.stroke();
+    }
+    // 篮口
+    ctx.strokeStyle = '#8C6335';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + BW, by); ctx.stroke();
+    // 接住提示线
+    ctx.strokeStyle = 'rgba(180,64,44,.10)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 6]);
+    ctx.beginPath(); ctx.moveTo(bx + BW / 2, 0); ctx.lineTo(bx + BW / 2, by); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function moveTo(clientX){
+    const r = frame.getBoundingClientRect();
+    S.bx = Math.max(4, Math.min(W - BW - 4, (clientX - r.left) / r.width * W - BW / 2));
+  }
+  frame.addEventListener('pointermove', e => { if(S.running) moveTo(e.clientX); });
+  frame.addEventListener('pointerdown', e => { if(S.running) moveTo(e.clientX); });
+
+  document.addEventListener('keydown', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = true;
+    if(e.key === ' ' && !S.running){ e.preventDefault(); start(); }
+  });
+  document.addEventListener('keyup', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = false;
+  });
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+  uiBest.textContent = save().best ? '最高 ' + save().best : '—';
+  draw();
+})();
+</script>
+</body>
+</html>

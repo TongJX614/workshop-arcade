@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>迷宫 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,440px);aspect-ratio:1/1;
+    background:#FBF8F1;border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.05);
+    display:grid;place-items:center;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .dpad{
+    display:grid;grid-template-columns:repeat(3,44px);grid-template-rows:repeat(3,44px);
+    gap:4px;justify-content:center;
+  }
+  .dpad button{
+    appearance:none;border:1px solid var(--line-2);background:var(--paper-hi);cursor:pointer;
+    border-radius:2px;display:grid;place-items:center;color:var(--ink);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
+    transition:background .12s,transform .08s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .dpad button:active{transform:translateY(1px);background:rgba(31,28,22,.06)}
+  .dpad button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .dpad .sp{visibility:hidden}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXI · Maze</div>
+      <h1>迷宫</h1>
+    </div>
+    <div class="bar__meta">步 <b id="uiSteps">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame"><canvas id="cv"></canvas></div>
+    <div class="plinth">
+      <span>从左上到右下 · <span id="uiSize">15 × 15</span></span>
+      <span class="r" id="uiBest">最短 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="dpad">
+      <span class="sp"></span>
+      <button data-d="0" aria-label="上"><svg viewBox="0 0 24 24"><path d="M6 14l6-6 6 6"/></svg></button>
+      <span class="sp"></span>
+      <button data-d="3" aria-label="左"><svg viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></svg></button>
+      <button data-d="2" aria-label="下"><svg viewBox="0 0 24 24"><path d="M6 10l6 6 6-6"/></svg></button>
+      <button data-d="1" aria-label="右"><svg viewBox="0 0 24 24"><path d="M10 6l6 6-6 6"/></svg></button>
+    </div>
+    <span class="sep"></span>
+    <div class="seg" id="segSize">
+      <button data-n="12">小</button>
+      <button data-n="16">中</button>
+      <button data-n="22">大</button>
+    </div>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const uiSteps = document.getElementById('uiSteps');
+  const uiSize = document.getElementById('uiSize');
+  const uiBest = document.getElementById('uiBest');
+  const segSize = document.getElementById('segSize');
+
+  const S = { n: 16, cells: [], px: 0, py: 0, steps: 0, done: false, trail: [] };
+
+  function save(){ return Store.get('save.maze', {}) || {}; }
+
+  const stepOf = (r, c, d) => d === 0 ? [r - 1, c] : d === 1 ? [r, c + 1] : d === 2 ? [r + 1, c] : [r, c - 1];
+
+  function generate(){
+    const n = S.n;
+    S.cells = [];
+    for(let i = 0; i < n * n; i++){
+      S.cells.push({ t: 1, r: 1, b: 1, l: 1, seen: false });
+    }
+    const stack = [0];
+    S.cells[0].seen = true;
+    let guard = 0;
+    while(stack.length && guard++ < n * n * 20){
+      const cur = stack[stack.length - 1];
+      const r = (cur / n) | 0, c = cur % n;
+      const cand = [];
+      for(let d = 0; d < 4; d++){
+        const [rr, cc] = stepOf(r, c, d);
+        if(rr < 0 || cc < 0 || rr >= n || cc >= n) continue;
+        if(!S.cells[rr * n + cc].seen) cand.push([rr * n + cc, d]);
+      }
+      if(!cand.length){ stack.pop(); continue; }
+      const [ni, d] = cand[Shell.rand(cand.length)];
+      S.cells[cur]['trbl'[d]] = 0;
+      S.cells[ni]['trbl'[(d + 2) % 4]] = 0;
+      S.cells[ni].seen = true;
+      stack.push(ni);
+    }
+    S.px = 0; S.py = 0; S.steps = 0; S.done = false; S.trail = [0];
+    uiSteps.textContent = '0';
+    uiSize.textContent = n + ' × ' + n;
+    const sv = save();
+    const best = sv['best' + n];
+    uiBest.textContent = best ? '最短 ' + best + ' 步' : '—';
+  }
+
+  function fit(){
+    const dpr = Shell.dpr();
+    const w = frame.clientWidth, h = frame.clientHeight;
+    const size = Math.min(w, h);
+    cv.width = Math.round(size * dpr);
+    cv.height = Math.round(size * dpr);
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw(ctx, size);
+  }
+
+  function draw(ctx, size){
+    const n = S.n;
+    const pad = Math.max(8, size * 0.04);
+    const cs = (size - pad * 2) / n;
+    ctx.clearRect(0, 0, size, size);
+
+    // 纸底
+    ctx.fillStyle = '#FBF8F1';
+    ctx.fillRect(0, 0, size, size);
+
+    // 走过的路：淡朱红面
+    if(S.trail.length){
+      ctx.fillStyle = 'rgba(180,64,44,.07)';
+      for(const i of S.trail){
+        const r = (i / n) | 0, c = i % n;
+        ctx.fillRect(pad + c * cs, pad + r * cs, cs, cs);
+      }
+    }
+
+    // 墙
+    ctx.strokeStyle = 'rgba(31,28,22,.72)';
+    ctx.lineWidth = Math.max(1.1, cs * 0.10);
+    ctx.lineCap = 'square';
+    ctx.beginPath();
+    for(let r = 0; r < n; r++) for(let c = 0; c < n; c++){
+      const cell = S.cells[r * n + c];
+      const x = pad + c * cs, y = pad + r * cs;
+      if(cell.t){ ctx.moveTo(x, y); ctx.lineTo(x + cs, y); }
+      if(cell.l){ ctx.moveTo(x, y); ctx.lineTo(x, y + cs); }
+      if(r === n - 1 && cell.b){ ctx.moveTo(x, y + cs); ctx.lineTo(x + cs, y + cs); }
+      if(c === n - 1 && cell.r){ ctx.moveTo(x + cs, y); ctx.lineTo(x + cs, y + cs); }
+    }
+    ctx.stroke();
+
+    // 出口：一枚朱红方块
+    const ex = pad + (n - 1) * cs, ey = pad + (n - 1) * cs;
+    ctx.fillStyle = 'rgba(180,64,44,.16)';
+    ctx.fillRect(ex + cs * .12, ey + cs * .12, cs * .76, cs * .76);
+    ctx.strokeStyle = 'rgba(180,64,44,.6)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(ex + cs * .12, ey + cs * .12, cs * .76, cs * .76);
+
+    // 入口
+    ctx.fillStyle = 'rgba(31,28,22,.06)';
+    ctx.fillRect(pad + cs * .12, pad + cs * .12, cs * .76, cs * .76);
+
+    // 玩家：墨点 + 一点光
+    const cx = pad + S.px * cs + cs / 2, cy = pad + S.py * cs + cs / 2;
+    const rad = cs * 0.27;
+    const g = ctx.createRadialGradient(cx - rad * .3, cy - rad * .35, rad * .1, cx, cy, rad);
+    g.addColorStop(0, '#5A5245');
+    g.addColorStop(1, '#1F1C16');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.35)';
+    ctx.beginPath();
+    ctx.arc(cx - rad * .3, cy - rad * .35, rad * .2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function repaint(){
+    const ctx = cv.getContext('2d');
+    const size = cv.width / Shell.dpr();
+    draw(ctx, size);
+  }
+
+  function move(d){
+    if(S.done) return;
+    const n = S.n;
+    const cell = S.cells[S.py * n + S.px];
+    if(cell['trbl'[d]] === 1){ Sound.bad(); haptic(5); return; }
+    const [r, c] = stepOf(S.py, S.px, d);
+    if(r < 0 || c < 0 || r >= n || c >= n) return;
+    S.py = r; S.px = c;
+    S.steps++;
+    S.trail.push(r * n + c);
+    uiSteps.textContent = S.steps;
+    Shell.bump(uiSteps);
+    Sound.tone(300 + Math.random() * 60, .03, 'sine', .04);
+    repaint();
+    if(r === n - 1 && c === n - 1) win();
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    const sv = save();
+    const key = 'best' + S.n;
+    const good = !sv[key] || S.steps < sv[key];
+    if(good) sv[key] = S.steps;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.maze', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'WAY OUT',
+        title: '走出来了',
+        sub: S.n + ' × ' + S.n + ' · ' + S.steps + ' 步' + (good && sv.plays > 1 ? ' · 刷新最短' : ''),
+        stars: S.steps <= S.n * 1.6 ? 3 : S.steps <= S.n * 2.4 ? 2 : 1,
+        buttons: [
+          { label: '再来一座', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 420);
+  }
+
+  function newGame(){
+    generate();
+    fit();
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.maze', sv);
+      newGame();
+    });
+  });
+
+  document.querySelectorAll('.dpad button').forEach(b => {
+    b.addEventListener('click', () => move(+b.dataset.d));
+  });
+
+  document.addEventListener('keydown', e => {
+    const map = { ArrowUp: 0, ArrowRight: 1, ArrowDown: 2, ArrowLeft: 3, w: 0, d: 1, s: 2, a: 3 };
+    if(map[e.key] != null){ move(map[e.key]); e.preventDefault(); }
+  });
+
+  // 在画面上滑动
+  let sx = 0, sy = 0, tracking = false;
+  frame.addEventListener('pointerdown', e => { sx = e.clientX; sy = e.clientY; tracking = true; });
+  frame.addEventListener('pointerup', e => {
+    if(!tracking) return; tracking = false;
+    const dx = e.clientX - sx, dy = e.clientY - sy;
+    if(Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+    if(Math.abs(dx) > Math.abs(dy)) move(dx > 0 ? 1 : 3);
+    else move(dy > 0 ? 2 : 0);
+  });
+
+  window.addEventListener('resize', () => { if(S.cells.length) fit(); });
+
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = [12, 16, 22].indexOf(save().n) >= 0 ? save().n : 16;
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

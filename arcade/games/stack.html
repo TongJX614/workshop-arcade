@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>叠塔 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,400px);aspect-ratio:3/4;
+    background:linear-gradient(180deg,#FBF8F1 0%,#EFE7D6 100%);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 50px rgba(31,28,22,.05);
+    overflow:hidden;cursor:pointer;touch-action:manipulation;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .overlay-tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:11px;letter-spacing:.22em;color:rgba(31,28,22,.42);
+    text-transform:uppercase;transition:opacity .3s;
+  }
+  .overlay-tip.hide{opacity:0}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXVI · Stack</div>
+      <h1>叠塔</h1>
+    </div>
+    <div class="bar__meta">层 <b id="uiLv">1</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="overlay-tip" id="tip">点一下落下</div>
+    </div>
+    <div class="plinth">
+      <span>塔高 <b id="uiLv2">1</b> 层</span>
+      <span class="r" id="uiBest">最高 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnDrop">落下</button>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      重来
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiLv = document.getElementById('uiLv');
+  const uiLv2 = document.getElementById('uiLv2');
+  const uiBest = document.getElementById('uiBest');
+
+  const W = 300, H = 400, LH = 22, BASE = 150;
+  const COLORS = ['#B4402C', '#2A241C', '#9C7F37', '#5F7A6A', '#7A6A92', '#B0793F'];
+
+  const S = { layers: [], cur: null, dir: 1, over: false, started: false, speed: 2.2, flashT: 0 };
+
+  function save(){ return Store.get('save.stack', {}) || {}; }
+
+  function ctx2d(){
+    const dpr = Shell.dpr();
+    cv.width = W * dpr; cv.height = H * dpr;
+    const c = cv.getContext('2d');
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return c;
+  }
+  const ctx = ctx2d();
+
+  function newBlock(){
+    const top = S.layers[S.layers.length - 1];
+    const w = top ? top.w : BASE;
+    const y = top ? top.y - LH : H - 40;
+    // 左右交替出发，别每层都从同一边来
+    const fromLeft = S.layers.length % 2 === 0;
+    S.cur = { x: fromLeft ? 4 : W - 4 - w, w, y };
+    S.dir = fromLeft ? 1 : -1;
+    S.speed = 2.1 + S.layers.length * 0.13;
+    tip.classList.add('hide');
+  }
+
+  function reset(){
+    S.layers = [{ x: (W - BASE) / 2, w: BASE, y: H - 40 }];
+    S.over = false;
+    S.started = false;
+    S.flashT = 0;
+    newBlock();
+    tip.classList.remove('hide');
+    uiLv.textContent = 1;
+    uiLv2.textContent = 1;
+    const sv = save();
+    uiBest.textContent = sv.best ? '最高 ' + sv.best + ' 层' : '—';
+  }
+
+  function drop(){
+    if(S.over) return;
+    if(!S.started){ S.started = true; tip.classList.add('hide'); }
+    const top = S.layers[S.layers.length - 1];
+    const l = Math.max(top.x, S.cur.x);
+    const r = Math.min(top.x + top.w, S.cur.x + S.cur.w);
+    if(r - l < 2){
+      S.over = true;
+      S.cur = null;
+      Sound.lose();
+      haptic([14, 50, 18]);
+      const sv = save();
+      const lv = S.layers.length;
+      if(lv > (sv.best || 0)) sv.best = lv;
+      sv.plays = (sv.plays || 0) + 1;
+      Store.set('save.stack', sv);
+      uiBest.textContent = '最高 ' + (sv.best || lv) + ' 层';
+      setTimeout(() => {
+        plate({
+          kicker: 'TOPPLED',
+          title: '塔倒了',
+          sub: '堆到第 ' + lv + ' 层',
+          stars: lv >= 22 ? 3 : lv >= 14 ? 2 : lv >= 8 ? 1 : 0,
+          buttons: [
+            { label: '再来一次', kind: 'ink', onClick: reset },
+            { label: '返回目录', onClick: () => Shell.back('../index.html') }
+          ]
+        });
+      }, 520);
+      return;
+    }
+    const perfect = Math.abs((r - l) - top.w) < 3;
+    S.layers.push({ x: l, w: r - l, y: top.y - LH });
+    Sound.drop(perfect ? 0 : S.layers.length % 5);
+    haptic(perfect ? [8, 26, 8] : 8);
+    if(perfect) S.flashT = 1;
+    if(S.flashT) Shell.floatNum(frame, 'PERFECT', '');
+    uiLv.textContent = S.layers.length;
+    uiLv2.textContent = S.layers.length;
+    Shell.bump(uiLv);
+    newBlock();
+  }
+
+  function loop(){
+    // 移动
+    if(S.cur && !S.over && S.started){
+      S.cur.x += S.dir * S.speed;
+      if(S.cur.x <= 4){ S.cur.x = 4; S.dir = 1; }
+      if(S.cur.x + S.cur.w >= W - 4){ S.cur.x = W - 4 - S.cur.w; S.dir = -1; }
+    }
+    // 相机：塔高了就整体下移
+    const camY = Math.max(0, (S.layers.length - 11) * LH);
+    ctx.clearRect(0, 0, W, H);
+
+    // 纸面淡纹
+    ctx.fillStyle = '#FBF8F1';
+    ctx.fillRect(0, 0, W, H);
+
+    // 地面
+    const gy = H - 40 - camY;
+    ctx.fillStyle = 'rgba(31,28,22,.08)';
+    ctx.fillRect(0, gy, W, Math.max(0, H - gy));
+    ctx.strokeStyle = 'rgba(31,28,22,.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+
+    // 层
+    S.layers.forEach((L, i) => {
+      const y = L.y - camY;
+      if(y > H + 40 || y < -60) return;
+      const col = COLORS[i % COLORS.length];
+      ctx.fillStyle = col;
+      ctx.fillRect(L.x, y - LH, L.w, LH);
+      // 顶面高光 / 侧面阴影
+      ctx.fillStyle = 'rgba(255,255,255,.20)';
+      ctx.fillRect(L.x, y - LH, L.w, 3);
+      ctx.fillStyle = 'rgba(0,0,0,.16)';
+      ctx.fillRect(L.x, y - 3, L.w, 3);
+      ctx.strokeStyle = 'rgba(255,255,255,.14)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(L.x + .5, y - LH + .5, L.w - 1, LH - 1);
+    });
+
+    // 当前块
+    if(S.cur){
+      const y = S.cur.y - camY;
+      const col = COLORS[S.layers.length % COLORS.length];
+      ctx.fillStyle = col;
+      ctx.fillRect(S.cur.x, y - LH, S.cur.w, LH);
+      ctx.fillStyle = 'rgba(255,255,255,.30)';
+      ctx.fillRect(S.cur.x, y - LH, S.cur.w, 3);
+      ctx.fillStyle = 'rgba(0,0,0,.18)';
+      ctx.fillRect(S.cur.x, y - 3, S.cur.w, 3);
+      // 与下一层的对齐参考线
+      const top = S.layers[S.layers.length - 1];
+      ctx.strokeStyle = 'rgba(180,64,44,.18)';
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(top.x, 0); ctx.lineTo(top.x, H);
+      ctx.moveTo(top.x + top.w, 0); ctx.lineTo(top.x + top.w, H);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if(S.flashT > 0){
+      S.flashT -= 0.04;
+      ctx.fillStyle = 'rgba(255,252,240,' + Math.max(0, S.flashT * 0.4) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+    requestAnimationFrame(loop);
+  }
+
+  frame.addEventListener('pointerdown', e => { e.preventDefault(); drop(); });
+  document.getElementById('btnDrop').addEventListener('click', drop);
+  document.addEventListener('keydown', e => {
+    if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); drop(); }
+  });
+  document.getElementById('btnNew').addEventListener('click', reset);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+  loop();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>打砖块 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 46px;}
+  .frame{
+    position:relative;width:min(100%,460px);aspect-ratio:10/12;
+    border:1px solid var(--line-2);
+    background:linear-gradient(180deg,#F8F3E8 0%,#EDE5D3 62%,#E5DCC8 100%);
+    border-radius:1px;
+    box-shadow:var(--sh-deep), inset 0 0 26px rgba(31,28,22,.06);
+    touch-action:none;overflow:hidden;
+  }
+  /* 台面内框：一圈发丝线，像球台边 */
+  .frame::before{
+    content:"";position:absolute;inset:5px;pointer-events:none;z-index:2;
+    border:1px solid rgba(31,28,22,.08);border-radius:1px;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;left:0;right:0;top:8px;text-align:center;
+    font-family:var(--serif);font-size:9px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--ink-3);pointer-events:none;
+  }
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">VII · Breakout</div>
+      <h1>打砖块</h1>
+    </div>
+    <div class="bar__meta">分数 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">拖动板子 · 接住球</div>
+    </div>
+    <div class="plinth">
+      <span>第 <b id="uiStage">1</b> 层 · 剩 <b id="uiLives">3</b> 球</span>
+      <span class="r" id="uiBest">最高 0</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnPlay">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, fmtNum, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const frame = document.getElementById('frame');
+  const stage = document.getElementById('stage');
+  const uiScore = document.getElementById('uiScore');
+  const uiStage = document.getElementById('uiStage');
+  const uiLives = document.getElementById('uiLives');
+  const uiBest = document.getElementById('uiBest');
+  const tip = document.getElementById('tip');
+  const btnPlay = document.getElementById('btnPlay');
+  const btnSound = document.getElementById('btnSound');
+
+  const COLS = 8, ROWS = 5;
+  const BRICK_COLORS = ['#2F4A63', '#33685C', '#9C7F37', '#B4642E', '#9E3A28'];
+  const PADDLE_Y = () => S.h - 22;
+
+  const store = Store.get('save.breakout', {}) || {};
+  const S = {
+    w: 320, h: 384,
+    paddle: { x: 140, w: 62, h: 7 },
+    ball: { x: 160, y: 300, r: 5.4, vx: 0, vy: 0, live: false },
+    bricks: [], score: 0, lives: 3, stage: 1,
+    running: false, over: false, started: false,
+    left: 0, right: 0,
+    best: store.best || 0,
+    maxStage: store.stage || 1,
+    sparks: [], trail: [], banner: 0,
+    last: 0
+  };
+
+  uiBest.textContent = '最高 ' + fmtNum(S.best);
+
+  /* ---------------- 尺寸 ---------------- */
+  function fit(){
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+    const r = frame.getBoundingClientRect();
+    if(!r.width) return;
+    S.w = r.width; S.h = r.height;
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    S.paddle.w = Math.max(46, S.w * 0.19);
+    S.paddle.h = Math.max(6, S.w * 0.016);
+    S.paddle.x = Math.max(0, Math.min(S.w - S.paddle.w, S.paddle.x));
+    S.ball.r = Math.max(4.4, S.w * 0.014);
+    layoutBricks();
+    if(!S.ball.live) stickBall();
+    draw();
+  }
+
+  function layoutBricks(fresh){
+    const padX = S.w * 0.05, top = S.h * 0.13;
+    const gap = S.w * 0.012;
+    const bw = (S.w - padX * 2 - gap * (COLS - 1)) / COLS;
+    const bh = Math.max(10, S.w * 0.034);
+    // 尺寸变化时保留已打掉的砖
+    const prev = (!fresh && S.bricks.length === COLS * ROWS) ? S.bricks.map(b => b.alive) : null;
+    const tough = Math.min(3, 1 + Math.floor((S.stage - 1) / 2));   // 隔关加一层壳，最多 3
+    S.bricks = [];
+    let alive = 0;
+    for(let r = 0; r < ROWS; r++) for(let c = 0; c < COLS; c++){
+      const idx = r * COLS + c;
+      const on = prev ? prev[idx] : true;
+      if(on) alive++;
+      S.bricks.push({
+        x: padX + c * (bw + gap),
+        y: top + r * (bh + gap),
+        w: bw, h: bh,
+        c: BRICK_COLORS[r % BRICK_COLORS.length],
+        hp: Math.max(1, tough - (r >= 2 ? 1 : 0)),
+        max: Math.max(1, tough - (r >= 2 ? 1 : 0)),
+        seed: Math.random(),
+        alive: on
+      });
+    }
+    S.left = alive;
+  }
+
+  /* ---------------- 绘制 ---------------- */
+  function rr(x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, S.w, S.h);
+
+    // 砖：一块压过边的漆木牌，被打过就起裂
+    S.bricks.forEach(b => {
+      if(!b.alive) return;
+      const bevel = Math.max(1.5, b.h * .28);
+
+      ctx.fillStyle = 'rgba(31,28,22,.20)';
+      ctx.fillRect(b.x + 1, b.y + 2, b.w, b.h);
+
+      ctx.fillStyle = b.c;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+
+      // 顶面亮、底面暗，做出厚度
+      ctx.fillStyle = 'rgba(255,255,255,.24)';
+      ctx.fillRect(b.x, b.y, b.w, bevel);
+      ctx.fillStyle = 'rgba(0,0,0,.18)';
+      ctx.fillRect(b.x, b.y + b.h - bevel * .8, b.w, bevel * .8);
+
+      ctx.strokeStyle = 'rgba(31,28,22,.30)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(b.x + .5, b.y + .5, b.w - 1, b.h - 1);
+
+      if(b.hp > 1){
+        // 多层砖：内描边，层数一眼可辨
+        ctx.strokeStyle = 'rgba(255,255,255,.42)';
+        ctx.strokeRect(b.x + 3.5, b.y + 3.5, Math.max(1, b.w - 7), Math.max(1, b.h - 7));
+      }
+      // 裂纹：按已掉的层数画 1~2 道
+      const dmg = b.max > 1 ? 1 - (b.hp - 1) / b.max : 0;
+      if(dmg > 0){
+        ctx.strokeStyle = 'rgba(20,16,12,.45)';
+        ctx.lineWidth = 1;
+        const k = b.seed;
+        ctx.beginPath();
+        ctx.moveTo(b.x + b.w * (.22 + k * .2), b.y + 1);
+        ctx.lineTo(b.x + b.w * (.40 + k * .2), b.y + b.h * .46);
+        ctx.lineTo(b.x + b.w * (.30 + k * .3), b.y + b.h - 1);
+        ctx.stroke();
+        if(dmg > .5){
+          ctx.beginPath();
+          ctx.moveTo(b.x + b.w * .62, b.y + 1);
+          ctx.lineTo(b.x + b.w * (.55 + k * .1), b.y + b.h * .55);
+          ctx.lineTo(b.x + b.w * .72, b.y + b.h - 1);
+          ctx.stroke();
+        }
+      }
+    });
+
+    // 板子：一条压实的木条，带投影和中缝
+    const p = S.paddle, py = PADDLE_Y();
+    ctx.save();
+    ctx.shadowColor = 'rgba(31,28,22,.32)';
+    ctx.shadowBlur = 7;
+    ctx.shadowOffsetY = 2;
+    ctx.fillStyle = '#1F1C16';
+    rr(p.x, py, p.w, p.h, p.h / 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,.22)';
+    ctx.fillRect(p.x + 4, py + 1, Math.max(1, p.w - 8), Math.max(1, p.h * .22));
+    // 中缝：接球点的参考
+    ctx.fillStyle = 'rgba(180,64,44,.85)';
+    ctx.fillRect(p.x + p.w / 2 - .75, py + 1, 1.5, p.h - 2);
+
+    // 轨迹：越靠后越淡
+    const b = S.ball;
+    if(S.trail.length > 1){
+      for(let i = 0; i < S.trail.length; i++){
+        const t = S.trail[i], k = (i + 1) / S.trail.length;
+        ctx.globalAlpha = .12 * k;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, b.r * (.35 + k * .55), 0, 7);
+        ctx.fillStyle = '#B4402C';
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 球
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, b.r, 0, 7);
+    ctx.fillStyle = '#B4402C';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(b.x - b.r * .3, b.y - b.r * .34, b.r * .32, 0, 7);
+    ctx.fillStyle = 'rgba(255,255,255,.72)';
+    ctx.fill();
+
+    // 火花
+    if(S.sparks.length){
+      for(let i = 0; i < S.sparks.length; i++){
+        const s = S.sparks[i];
+        ctx.globalAlpha = Math.max(0, Math.min(1, s.life));
+        ctx.fillStyle = s.c;
+        ctx.fillRect(s.x - 1.2, s.y - 1.2, 2.4, 2.4);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    // 底部界线
+    ctx.strokeStyle = 'rgba(31,28,22,.20)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, S.h - 8); ctx.lineTo(S.w, S.h - 8); ctx.stroke();
+  }
+
+  /* ---------------- 火花 ---------------- */
+  function burst(x, y, color, n){
+    for(let i = 0; i < n; i++){
+      const a = Math.random() * Math.PI * 2;
+      const v = 40 + Math.random() * 110;
+      S.sparks.push({
+        x: x, y: y,
+        vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+        life: 1, c: color
+      });
+    }
+    if(S.sparks.length > 90) S.sparks.splice(0, S.sparks.length - 90);
+  }
+  function stepSparks(dt){
+    if(!S.sparks.length) return;
+    for(let i = S.sparks.length - 1; i >= 0; i--){
+      const s = S.sparks[i];
+      s.x += s.vx * dt;
+      s.y += s.vy * dt;
+      s.vy += 240 * dt;
+      s.life -= dt * 2.4;
+      if(s.life <= 0) S.sparks.splice(i, 1);
+    }
+  }
+
+  /* ---------------- 生命周期 ---------------- */
+  function stickBall(){
+    const b = S.ball;
+    b.x = S.paddle.x + S.paddle.w / 2;
+    b.y = PADDLE_Y() - b.r - 2;
+    b.vx = 0; b.vy = 0;
+    b.live = false;
+    S.trail.length = 0;
+  }
+  function launchBall(){
+    const b = S.ball;
+    const speed = Math.min(430, 268 + (S.stage - 1) * 26);
+    const ang = (-52 + Math.random() * 104) * Math.PI / 180;
+    b.vx = Math.sin(ang) * speed;
+    b.vy = -Math.cos(ang) * speed;
+    b.live = true;
+  }
+
+  function resetAll(){
+    S.score = 0;
+    S.lives = 3;
+    S.stage = 1;
+    S.over = false;
+    uiScore.textContent = '0';
+    uiStage.textContent = '1';
+    uiLives.textContent = '3';
+    S.paddle.x = (S.w - S.paddle.w) / 2;
+    layoutBricks(true);
+    stickBall();
+    draw();
+  }
+
+  function setBtn(label){ btnPlay.textContent = label; }
+
+  function newGame(){
+    resetAll();
+    S.started = true;
+    S.running = true;
+    S.last = 0;
+    launchBall();
+    setBtn('暂停');
+    tip.textContent = '拖动板子 · 接住球';
+    Sound.tone(520, .09, 'sine', .08);
+  }
+
+  function resume(){
+    if(!S.ball.live) launchBall();
+    S.running = true;
+    S.last = 0;
+    setBtn('暂停');
+    tip.textContent = '拖动板子 · 接住球';
+    Sound.tone(480, .07, 'sine', .07);
+  }
+
+  function pause(){
+    S.running = false;
+    setBtn('继续');
+    tip.textContent = '已暂停';
+    draw();
+  }
+
+  function toggle(){
+    if(S.over){ newGame(); return; }
+    if(S.running) pause();
+    else if(!S.started) newGame();
+    else resume();
+  }
+
+  function die(){
+    S.lives--;
+    uiLives.textContent = Math.max(0, S.lives);
+    Sound.lose();
+    haptic(40);
+    S.running = false;
+    stickBall();
+
+    if(S.lives <= 0){
+      S.over = true;
+      const s = Store.get('save.breakout', {}) || {};
+      s.best = Math.max(s.best || 0, S.score);
+      s.stage = Math.max(s.stage || 1, S.stage);
+      s.plays = (s.plays || 0) + 1;
+      Store.set('save.breakout', s);
+      S.best = s.best;
+      uiBest.textContent = '最高 ' + fmtNum(s.best);
+      setBtn('重开');
+      tip.textContent = '球用完了';
+      plate({
+        kicker: 'GAME OVER',
+        title: '球用完了',
+        sub: '得分 ' + fmtNum(S.score) + ' · 到第 ' + S.stage + ' 层',
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: () => newGame() },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+      draw();
+      return;
+    }
+    setBtn('继续');
+    tip.textContent = '还剩 ' + S.lives + ' 球 · 点继续';
+    draw();
+  }
+
+  function clearStage(){
+    S.stage++;
+    uiStage.textContent = S.stage;
+    Sound.done();
+    haptic([10, 30, 10]);
+    Shell.flash(frame, 420);
+    S.sparks.length = 0;
+    burst(S.w / 2, S.h * .3, '#B4402C', 24);
+    if(S.stage > S.maxStage){
+      S.maxStage = S.stage;
+      const s = Store.get('save.breakout', {}) || {};
+      s.best = Math.max(s.best || 0, S.score);
+      s.stage = S.maxStage;
+      Store.set('save.breakout', s);
+    }
+    layoutBricks(true);
+    stickBall();
+    S.last = 0;
+    launchBall();
+    S.running = true;
+    setBtn('暂停');
+    tip.textContent = '第 ' + S.stage + ' 层';
+    setTimeout(() => { if(S.running) tip.textContent = '拖动板子 · 接住球'; }, 1400);
+  }
+
+  /* ---------------- 物理 ---------------- */
+  function hitBrick(br){
+    br.hp--;
+    if(br.hp <= 0){
+      br.alive = false;
+      S.left--;
+      S.score += 10 * S.stage;
+      burst(br.x + br.w / 2, br.y + br.h / 2, br.c, 10);
+    }else{
+      S.score += 4;
+      burst(br.x + br.w / 2, br.y + br.h / 2, br.c, 4);
+    }
+    uiScore.textContent = fmtNum(S.score);
+    Shell.bump(uiScore);
+    Sound.tone(430 + Math.random() * 120, .045, 'square', .05);
+    haptic(5);
+    if(S.left <= 0){ clearStage(); return true; }
+    return false;
+  }
+
+  function step(dt){
+    const b = S.ball, p = S.paddle, py = PADDLE_Y();
+
+    if(S.left) p.x -= 420 * dt;
+    if(S.right) p.x += 420 * dt;
+    p.x = Math.max(0, Math.min(S.w - p.w, p.x));
+
+    if(!b.live){ stickBall(); return; }
+
+    // 分步推进，避免高速穿透
+    const speed = Math.hypot(b.vx, b.vy) || 1;
+    const steps = Math.max(1, Math.min(8, Math.ceil(speed * dt / (b.r * 1.2))));
+    const sub = dt / steps;
+
+    for(let i = 0; i < steps; i++){
+      b.x += b.vx * sub;
+      b.y += b.vy * sub;
+
+      // 左右墙 / 顶
+      if(b.x < b.r){ b.x = b.r; b.vx = Math.abs(b.vx); hit(); }
+      if(b.x > S.w - b.r){ b.x = S.w - b.r; b.vx = -Math.abs(b.vx); hit(); }
+      if(b.y < b.r){ b.y = b.r; b.vy = Math.abs(b.vy); hit(); }
+
+      // 板子
+      if(b.vy > 0 && b.y + b.r >= py && b.y - b.r <= py + p.h &&
+         b.x >= p.x - b.r * .5 && b.x <= p.x + p.w + b.r * .5){
+        b.y = py - b.r;
+        const rel = Math.max(-1, Math.min(1, (b.x - (p.x + p.w / 2)) / (p.w / 2)));
+        const sp = Math.min(470, Math.max(272, Math.hypot(b.vx, b.vy) * 1.028));
+        const ang = rel * 1.0;
+        b.vx = Math.sin(ang) * sp;
+        b.vy = -Math.cos(ang) * sp;
+        Sound.tone(300 + Math.abs(rel) * 90, .04, 'sine', .06);
+      }
+
+      // 砖：命中后把球推出砖外，避免连续几帧卡在砖里反复反弹
+      for(const br of S.bricks){
+        if(!br.alive) continue;
+        const ox = Math.min(b.x + b.r, br.x + br.w) - Math.max(b.x - b.r, br.x);
+        const oy = Math.min(b.y + b.r, br.y + br.h) - Math.max(b.y - b.r, br.y);
+        if(ox <= 0 || oy <= 0) continue;
+
+        if(ox < oy){
+          if(b.x < br.x + br.w / 2){ b.x -= ox; b.vx = -Math.abs(b.vx); }
+          else { b.x += ox; b.vx = Math.abs(b.vx); }
+        }else{
+          if(b.y < br.y + br.h / 2){ b.y -= oy; b.vy = -Math.abs(b.vy); }
+          else { b.y += oy; b.vy = Math.abs(b.vy); }
+        }
+        if(hitBrick(br)) return;        // 过关时已换新球，本帧到此为止
+        break;                          // 一步只处理一块砖
+      }
+
+      if(b.y - b.r > S.h){ die(); return; }
+    }
+  }
+
+  let audioTick = 0;
+  function hit(){
+    if(performance.now() - audioTick < 60) return;
+    audioTick = performance.now();
+    Sound.tone(240, .04, 'triangle', .05);
+  }
+
+  function loop(t){
+    requestAnimationFrame(loop);
+    if(!S.running){ S.last = 0; return; }
+    if(!S.last) S.last = t;
+    const dt = Math.min(0.05, (t - S.last) / 1000);
+    S.last = t;
+    step(dt);
+    stepSparks(dt);
+    if(S.ball.live){
+      S.trail.push({ x: S.ball.x, y: S.ball.y });
+      if(S.trail.length > 7) S.trail.shift();
+    }
+    draw();
+  }
+  requestAnimationFrame(loop);
+
+  /* ---------------- 输入 ---------------- */
+  function pointerX(e){
+    const r = cv.getBoundingClientRect();
+    return (e.clientX - r.left) / r.width * S.w;
+  }
+  function movePaddle(x){
+    const p = S.paddle;
+    p.x = Math.max(0, Math.min(S.w - p.w, x - p.w / 2));
+    if(!S.ball.live){ stickBall(); draw(); }
+  }
+  // 整个舞台都能拖，手机上手不用找
+  function onDown(e){
+    if(e.target.closest('.controls')) return;
+    movePaddle(pointerX(e));
+  }
+  frame.addEventListener('pointerdown', e => { try{ frame.setPointerCapture(e.pointerId); }catch(_){} onDown(e); });
+  frame.addEventListener('pointermove', e => {
+    if(e.pointerType === 'mouse' && !e.buttons) return;
+    movePaddle(pointerX(e));
+  });
+  stage.addEventListener('pointerdown', e => { if(e.target.closest('.frame')) return; movePaddle(pointerX(e)); });
+  stage.addEventListener('pointermove', e => {
+    if(e.target.closest('.frame')) return;
+    if(e.pointerType === 'mouse' && !e.buttons) return;
+    movePaddle(pointerX(e));
+  });
+
+  document.addEventListener('keydown', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.left = 1;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.right = 1;
+    if(e.key === ' '){ e.preventDefault(); toggle(); }
+    if(e.key === 'p' || e.key === 'P') toggle();
+  });
+  document.addEventListener('keyup', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.left = 0;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.right = 0;
+  });
+
+  btnPlay.addEventListener('click', toggle);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  window.addEventListener('resize', () => fit());
+
+  fit();
+  layoutBricks(true);
+  stickBall();
+  draw();
+})();
+</script>
+</body>
+</html>

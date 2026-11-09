@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>乒乓 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,380px);aspect-ratio:3/4;
+    background:#FBF8F1;border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.05);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXVIII · Pong</div>
+      <h1>乒乓</h1>
+    </div>
+    <div class="bar__meta"><b id="uiScore">0 : 0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">拖动或按 ← → 移动<br>先到 7 分</div>
+    </div>
+    <div class="plinth">
+      <span>你 <b id="uiP">0</b> · 机器 <b id="uiA">0</b></span>
+      <span class="r" id="uiState">先到 7 分</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开球</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiP = document.getElementById('uiP');
+  const uiA = document.getElementById('uiA');
+  const uiState = document.getElementById('uiState');
+
+  const W = 360, H = 480;
+  const PW = 74, PH = 9, R = 7;
+  const WIN = 7;
+
+  const S = {
+    px: W / 2 - PW / 2, ax: W / 2 - PW / 2,
+    ball: { x: W / 2, y: H / 2, vx: 0, vy: 0, live: false },
+    p: 0, a: 0, running: false, done: false, last: 0, keys: {}
+  };
+
+  function save(){ return Store.get('save.pong', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  function serve(toPlayer){
+    S.ball.x = W / 2;
+    S.ball.y = H / 2;
+    S.ball.vx = (Math.random() < .5 ? -1 : 1) * 190;
+    S.ball.vy = toPlayer ? 250 : -250;
+    S.ball.live = false;
+    setTimeout(() => { S.ball.live = true; }, 420);
+  }
+
+  function start(){
+    S.p = 0; S.a = 0; S.done = false; S.running = true;
+    S.px = W / 2 - PW / 2; S.ax = W / 2 - PW / 2;
+    tip.classList.add('hide');
+    serve(false);
+    updateHud();
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function updateHud(){
+    uiScore.textContent = S.p + ' : ' + S.a;
+    uiP.textContent = S.p;
+    uiA.textContent = S.a;
+  }
+
+  function point(who){
+    if(who === 'p'){ S.p++; Sound.win(); }
+    else { S.a++; Sound.bad(); }
+    haptic(who === 'p' ? [8, 26] : 14);
+    updateHud();
+    if(S.p >= WIN || S.a >= WIN){ end(); return; }
+    serve(who === 'p' ? false : true);
+  }
+
+  function end(){
+    S.running = false;
+    S.done = true;
+    const won = S.p > S.a;
+    if(won) Sound.win(); else Sound.lose();
+    haptic(won ? [10, 30, 12] : [14, 40]);
+    const sv = save();
+    sv.plays = (sv.plays || 0) + 1;
+    if(won) sv.wins = (sv.wins || 0) + 1;
+    else sv.loses = (sv.loses || 0) + 1;
+    Store.set('save.pong', sv);
+    uiState.textContent = won ? '你赢' : '机器赢';
+    setTimeout(() => {
+      plate({
+        kicker: won ? 'MATCH WON' : 'MATCH LOST',
+        title: won ? '赢下这一局' : '输给机器',
+        sub: S.p + ' : ' + S.a,
+        stars: won ? (S.a === 0 ? 3 : S.a <= 3 ? 2 : 1) : 0,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 620);
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.032, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+
+    // 键盘
+    if(S.keys.left) S.px -= 420 * dt;
+    if(S.keys.right) S.px += 420 * dt;
+    S.px = Math.max(6, Math.min(W - PW - 6, S.px));
+
+    // AI：追球但带一点迟滞
+    const target = S.ball.x - PW / 2;
+    const diff = target - S.ax;
+    const maxV = 300 * dt;
+    S.ax += Math.max(-maxV, Math.min(maxV, diff * 0.9));
+    S.ax = Math.max(6, Math.min(W - PW - 6, S.ax));
+
+    const b = S.ball;
+    if(b.live){
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+      if(b.x - R < 2){ b.x = R + 2; b.vx = Math.abs(b.vx); Sound.tone(300, .04, 'square', .05); }
+      if(b.x + R > W - 2){ b.x = W - R - 2; b.vx = -Math.abs(b.vx); Sound.tone(300, .04, 'square', .05); }
+
+      // 玩家板（下方）
+      const py = H - 30;
+      if(b.vy > 0 && b.y + R >= py && b.y + R <= py + PH + 8 && b.x > S.px - 4 && b.x < S.px + PW + 4){
+        b.y = py - R;
+        b.vy = -Math.abs(b.vy) * 1.03;
+        const off = (b.x - (S.px + PW / 2)) / (PW / 2);
+        b.vx = b.vx * 0.5 + off * 250;
+        Sound.tone(520, .06, 'triangle', .1);
+        haptic(6);
+      }
+      // AI 板（上方）
+      const ay = 21;
+      if(b.vy < 0 && b.y - R <= ay + PH && b.y - R >= ay - 8 && b.x > S.ax - 4 && b.x < S.ax + PW + 4){
+        b.y = ay + PH + R;
+        b.vy = Math.abs(b.vy) * 1.03;
+        const off = (b.x - (S.ax + PW / 2)) / (PW / 2);
+        b.vx = b.vx * 0.5 + off * 210;
+        Sound.tone(380, .05, 'triangle', .08);
+      }
+      // 速度上限，别太快
+      const sp = Math.hypot(b.vx, b.vy);
+      const cap = 460;
+      if(sp > cap){ b.vx = b.vx / sp * cap; b.vy = b.vy / sp * cap; }
+
+      if(b.y - R > H){ point('a'); }
+      else if(b.y + R < 0){ point('p'); }
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#FBF8F1';
+    ctx.fillRect(0, 0, W, H);
+
+    // 中线
+    ctx.strokeStyle = 'rgba(31,28,22,.12)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath(); ctx.moveTo(0, H / 2); ctx.lineTo(W, H / 2); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 分数
+    ctx.fillStyle = 'rgba(31,28,22,.10)';
+    ctx.font = '600 66px Georgia, serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(S.a), W / 2, H / 2 - 26);
+    ctx.fillText(String(S.p), W / 2, H / 2 + 94);
+
+    // AI 板
+    ctx.fillStyle = '#2A241C';
+    roundRect(S.ax, 21, PW, PH, 3);
+    // 玩家板
+    ctx.fillStyle = '#B4402C';
+    roundRect(S.px, H - 30, PW, PH, 3);
+
+    // 球
+    if(S.ball.live || S.running){
+      ctx.save();
+      ctx.shadowColor = 'rgba(180,64,44,.35)';
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = '#B4402C';
+      ctx.beginPath();
+      ctx.arc(S.ball.x, S.ball.y, R, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      ctx.beginPath();
+      ctx.arc(S.ball.x - R * .3, S.ball.y - R * .35, R * .3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function roundRect(x, y, w, h, r){
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  /* 触控 / 鼠标 */
+  function movePaddle(clientX){
+    const rect = frame.getBoundingClientRect();
+    const x = (clientX - rect.left) / rect.width * W;
+    S.px = Math.max(6, Math.min(W - PW - 6, x - PW / 2));
+  }
+  frame.addEventListener('pointermove', e => { movePaddle(e.clientX); });
+  frame.addEventListener('pointerdown', e => { movePaddle(e.clientX); });
+
+  document.addEventListener('keydown', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = true;
+    if(e.key === ' ' && !S.running){ e.preventDefault(); start(); }
+  });
+  document.addEventListener('keyup', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = false;
+  });
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  // 静态预览
+  draw();
+})();
+</script>
+</body>
+</html>

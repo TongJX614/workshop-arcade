@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>连连看 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .board{
+    position:relative;width:min(100%,460px);aspect-ratio:8/6;
+    display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(6,1fr);
+    gap:3px;padding:3px;background:rgba(31,28,22,.06);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);
+  }
+  .board svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:4}
+  .cell{
+    appearance:none;border:1px solid var(--line);background:var(--paper-hi);cursor:pointer;
+    padding:0;display:grid;place-items:center;border-radius:1px;position:relative;
+    font-family:var(--serif);font-size:clamp(16px,4.6vw,21px);color:var(--ink);letter-spacing:.04em;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+    transition:transform .14s var(--ease),box-shadow .16s,background .16s,border-color .16s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .cell:hover{background:#FFFDF7;border-color:var(--line-2)}
+  .cell.sel{
+    border-color:var(--accent);background:#FDF3ED;
+    box-shadow:0 0 0 1px var(--accent),0 6px 12px -10px rgba(31,28,22,.9);
+    transform:scale(.94);
+  }
+  .cell.gone{
+    opacity:0;pointer-events:none;transform:scale(.4);
+    transition:opacity .22s,transform .22s;
+  }
+  .cell.hint{animation:pulse .5s ease 2}
+  @keyframes pulse{50%{background:#F7E7DE;border-color:var(--accent)}}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXV · Link Link</div>
+      <h1>连连看</h1>
+    </div>
+    <div class="bar__meta">剩 <b id="uiLeft">48</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board">
+      <svg id="path" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+    </div>
+    <div class="plinth">
+      <span>剩 <b id="uiLeft2">48</b> 块 · <span id="uiState">选两个相同的字</span></span>
+      <span class="r" id="uiBest">—</span>
+    </div>
+    <div class="hint" style="font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2)">两个同样的字，若能用不超过两次转弯的线连起来就能消掉</div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnShuffle">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h4l3 4 3-4h4"/><path d="M4 17h4l3-4"/><path d="M18 4v4h-3"/><path d="M18 20v-4h-3"/></svg>
+      重排
+    </button>
+    <button class="btn" id="btnHint">提示</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const C = 8, R = 6;
+  const GLYPH = ['梅','兰','竹','菊','松','石','云','水','风','月','雪','星'];
+
+  const boardEl = document.getElementById('board');
+  const pathEl = document.getElementById('path');
+  const uiLeft = document.getElementById('uiLeft');
+  const uiLeft2 = document.getElementById('uiLeft2');
+  const uiState = document.getElementById('uiState');
+  const uiBest = document.getElementById('uiBest');
+
+  const S = { g: [], els: [], sel: null, left: 0, done: false, busy: false };
+
+  function save(){ return Store.get('save.link', {}) || {}; }
+
+  const EMPTY = -1;
+  const empty = (r, c) => r >= 0 && r < R && c >= 0 && c < C && S.g[r][c] === EMPTY;
+
+  function generate(){
+    const deck = [];
+    const pairs = (R * C) / 2;
+    for(let i = 0; i < pairs; i++) deck.push(i % GLYPH.length, i % GLYPH.length);
+    Shell.shuffle(deck);
+    S.g = [];
+    for(let r = 0; r < R; r++){
+      const row = [];
+      for(let c = 0; c < C; c++) row.push(deck[r * C + c]);
+      S.g.push(row);
+    }
+  }
+
+  function build(){
+    Array.prototype.slice.call(boardEl.querySelectorAll('.cell')).forEach(e => e.remove());
+    S.els = [];
+    for(let r = 0; r < R; r++){
+      const row = [];
+      for(let c = 0; c < C; c++){
+        const b = document.createElement('button');
+        b.className = 'cell';
+        b.dataset.r = r; b.dataset.c = c;
+        b.addEventListener('click', () => tap(r, c));
+        boardEl.appendChild(b);
+        row.push(b);
+      }
+      S.els.push(row);
+    }
+    S.left = R * C;
+    S.done = false;
+    S.sel = null;
+    paint();
+  }
+
+  function paint(){
+    let left = 0;
+    for(let r = 0; r < R; r++) for(let c = 0; c < C; c++){
+      const el = S.els[r][c], v = S.g[r][c];
+      if(v === EMPTY){
+        el.textContent = '';
+        el.classList.add('gone');
+        el.disabled = true;
+      }else{
+        left++;
+        el.textContent = GLYPH[v];
+        el.disabled = false;
+        el.classList.toggle('gone', false);
+      }
+    }
+    S.left = left;
+    uiLeft.textContent = left;
+    uiLeft2.textContent = left;
+  }
+
+  /* --------- 连线判定 --------- */
+  function straight(a, b){
+    if(a.r === b.r){
+      const lo = Math.min(a.c, b.c), hi = Math.max(a.c, b.c);
+      for(let c = lo + 1; c < hi; c++) if(!empty(a.r, c)) return false;
+      return true;
+    }
+    if(a.c === b.c){
+      const lo = Math.min(a.r, b.r), hi = Math.max(a.r, b.r);
+      for(let r = lo + 1; r < hi; r++) if(!empty(r, a.c)) return false;
+      return true;
+    }
+    return false;
+  }
+
+  function oneTurn(a, b){
+    const corners = [{ r: a.r, c: b.c }, { r: b.r, c: a.c }];
+    for(const p of corners){
+      if(!empty(p.r, p.c)) continue;
+      if(straight(a, p) && straight(p, b)) return [a, p, b];
+    }
+    return null;
+  }
+
+  function findPath(a, b){
+    if(straight(a, b)) return [a, b];
+    const one = oneTurn(a, b);
+    if(one) return one;
+    // 两个转弯：先在 a 所在的行/列上找一个空格中转
+    for(let c = 0; c < C; c++){
+      const p = { r: a.r, c };
+      if(c === a.c || !empty(p.r, p.c)) continue;
+      if(!straight(a, p)) continue;
+      const sub = straight(p, b) ? [p, b] : oneTurn(p, b);
+      if(sub) return [a].concat(sub);
+    }
+    for(let r = 0; r < R; r++){
+      const p = { r, c: a.c };
+      if(r === a.r || !empty(p.r, p.c)) continue;
+      if(!straight(a, p)) continue;
+      const sub = straight(p, b) ? [p, b] : oneTurn(p, b);
+      if(sub) return [a].concat(sub);
+    }
+    return null;
+  }
+
+  function drawPath(path){
+    const pts = path.map(p => ((p.c + .5) / C * 100).toFixed(2) + ',' + ((p.r + .5) / R * 100).toFixed(2)).join(' ');
+    pathEl.innerHTML = '<polyline points="' + pts + '" fill="none" stroke="#B4402C" stroke-width="1.4" ' +
+      'vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round" ' +
+      'opacity="0"><animate attributeName="opacity" from="1" to="0" dur="0.42s" fill="freeze"/></polyline>';
+    setTimeout(() => { pathEl.innerHTML = ''; }, 440);
+  }
+
+  function tap(r, c){
+    if(S.busy || S.done || S.g[r][c] === EMPTY) return;
+    const cur = { r, c };
+    if(!S.sel){
+      S.sel = cur;
+      S.els[r][c].classList.add('sel');
+      Sound.tone(520, .04, 'sine', .05);
+      haptic(5);
+      return;
+    }
+    const a = S.sel;
+    if(a.r === r && a.c === c){
+      S.els[r][c].classList.remove('sel');
+      S.sel = null;
+      return;
+    }
+    if(S.g[a.r][a.c] !== S.g[r][c]){
+      S.els[a.r][a.c].classList.remove('sel');
+      S.sel = cur;
+      S.els[r][c].classList.add('sel');
+      Sound.tone(400, .04, 'sine', .04);
+      return;
+    }
+    const path = findPath(a, cur);
+    if(!path){
+      Sound.bad();
+      haptic(6);
+      uiState.textContent = '这两个连不上 — 换一条路';
+      S.els[a.r][a.c].classList.remove('sel');
+      S.sel = null;
+      return;
+    }
+    // 消掉
+    S.els[a.r][a.c].classList.remove('sel');
+    S.sel = null;
+    S.busy = true;
+    drawPath(path);
+    Sound.drop(3);
+    haptic(10);
+    const ea = S.els[a.r][a.c], eb = S.els[r][c];
+    S.g[a.r][a.c] = EMPTY; S.g[r][c] = EMPTY;
+    ea.textContent = ''; eb.textContent = '';
+    ea.classList.add('gone'); eb.classList.add('gone');
+    ea.disabled = true; eb.disabled = true;
+    S.left -= 2;
+    uiLeft.textContent = S.left;
+    uiLeft2.textContent = S.left;
+    uiState.textContent = '消掉一对';
+    setTimeout(() => {
+      S.busy = false;
+      if(S.left === 0) win();
+      else if(!anyMove()){
+        uiState.textContent = '没可消的了，自动重排';
+        setTimeout(shuffle, 300);
+      }
+    }, 300);
+  }
+
+  function pairs(){
+    const pos = {};
+    for(let r = 0; r < R; r++) for(let c = 0; c < C; c++){
+      const v = S.g[r][c];
+      if(v === EMPTY) continue;
+      (pos[v] = pos[v] || []).push({ r, c });
+    }
+    return pos;
+  }
+
+  function anyMove(){
+    const map = pairs();
+    for(const k in map){
+      const list = map[k];
+      for(let i = 0; i < list.length; i++){
+        for(let j = i + 1; j < list.length; j++){
+          if(findPath(list[i], list[j])) return [list[i], list[j]];
+        }
+      }
+    }
+    return null;
+  }
+
+  function shuffle(){
+    const vals = [];
+    for(let r = 0; r < R; r++) for(let c = 0; c < C; c++){
+      if(S.g[r][c] !== EMPTY) vals.push(S.g[r][c]);
+    }
+    Shell.shuffle(vals);
+    let k = 0;
+    for(let r = 0; r < R; r++) for(let c = 0; c < C; c++){
+      if(S.g[r][c] !== EMPTY) S.g[r][c] = vals[k++];
+    }
+    S.sel = null;
+    Array.prototype.forEach.call(boardEl.querySelectorAll('.cell'), e => e.classList.remove('sel'));
+    paint();
+    Sound.tone(420, .06, 'triangle', .07);
+    if(!anyMove()) setTimeout(shuffle, 200);
+  }
+
+  function hint(){
+    if(S.busy || S.done) return;
+    const m = anyMove();
+    if(!m){ Shell.toast('没有可消的一对了'); return; }
+    m.forEach(p => {
+      const el = S.els[p.r][p.c];
+      el.classList.add('hint');
+      setTimeout(() => el.classList.remove('hint'), 1100);
+    });
+    Sound.tone(560, .05, 'sine', .05);
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    const sv = save();
+    sv.wins = (sv.wins || 0) + 1;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.link', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'CLEARED',
+        title: '全部消完',
+        sub: R + ' × ' + C + ' · 共 ' + (R * C / 2) + ' 对',
+        stars: 3,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 400);
+  }
+
+  function newGame(){
+    generate();
+    build();
+    if(!anyMove()) shuffle();
+    const sv = save();
+    uiBest.textContent = sv.wins ? '已清 ' + sv.wins + ' 盘' : '—';
+  }
+
+  document.getElementById('btnShuffle').addEventListener('click', () => {
+    if(S.left) shuffle();
+  });
+  document.getElementById('btnHint').addEventListener('click', hint);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  newGame();
+})();
+</script>
+</body>
+</html>

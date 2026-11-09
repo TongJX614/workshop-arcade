@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>打地鼠 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:14px}
+  .field{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(8px,2.6vw,16px);
+    width:min(100%,380px);aspect-ratio:1/1;
+  }
+  .hole{
+    position:relative;border:0;background:transparent;padding:0;cursor:pointer;
+    overflow:hidden;-webkit-tap-highlight-color:transparent;
+  }
+  /* 洞口：一枚椭圆暗槽 */
+  .hole::before{
+    content:"";position:absolute;left:8%;right:8%;bottom:10%;height:34%;
+    border-radius:50%;
+    background:radial-gradient(ellipse at 50% 30%,#2A241C 0%,#3C342A 70%,#4A4034 100%);
+    box-shadow:inset 0 4px 8px rgba(0,0,0,.55),0 1px 0 rgba(255,255,255,.4);
+  }
+  .hole::after{
+    content:"";position:absolute;left:2%;right:2%;bottom:2%;height:14%;
+    border-radius:50%;background:rgba(31,28,22,.07);filter:blur(3px);
+  }
+  .mole{
+    position:absolute;left:50%;bottom:6%;width:62%;aspect-ratio:1/1.08;
+    transform:translate(-50%,110%);
+    transition:transform .16s cubic-bezier(.3,1.6,.5,1);
+    z-index:2;will-change:transform;
+  }
+  .hole.up .mole{transform:translate(-50%,-6%)}
+  .mole .body{
+    position:absolute;inset:0;border-radius:46% 46% 40% 40%;
+    background:radial-gradient(circle at 36% 26%,#B0824E,#8A5F33 60%,#6E4A27);
+    box-shadow:inset 0 -4px 6px rgba(0,0,0,.25),0 4px 8px -4px rgba(31,28,22,.6);
+  }
+  .mole .ear{position:absolute;width:26%;aspect-ratio:1/1;border-radius:50%;background:#7A5430;top:8%}
+  .mole .ear.l{left:2%}
+  .mole .ear.r{right:2%}
+  .mole .eye{position:absolute;width:9%;aspect-ratio:1/1;border-radius:50%;background:#1F1C16;top:40%}
+  .mole .eye.l{left:30%}
+  .mole .eye.r{right:30%}
+  .mole .snout{
+    position:absolute;left:50%;top:56%;width:34%;aspect-ratio:1.5/1;transform:translateX(-50%);
+    border-radius:50%;background:#D9B98B;
+  }
+  .mole .nose{position:absolute;left:50%;top:60%;width:11%;aspect-ratio:1/1;transform:translateX(-50%);border-radius:50%;background:#3A2A1C}
+  .mole.hit{animation:hit .22s ease}
+  @keyframes hit{0%{transform:translate(-50%,-6%) scale(1)}45%{transform:translate(-50%,-12%) scale(1.14,.9)}100%{transform:translate(-50%,-6%) scale(1)}}
+  .hud{display:flex;align-items:baseline;gap:18px;font-family:var(--serif);font-size:10px;letter-spacing:.18em;color:var(--ink-3)}
+  .hud b{font-size:18px;color:var(--ink);font-weight:400;font-variant-numeric:tabular-nums}
+  .hud .t{color:var(--accent)}
+  .plinth b{color:var(--accent)}
+  .startmask{
+    position:absolute;inset:0;display:grid;place-items:center;
+    background:rgba(242,238,228,.72);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
+    font-family:var(--serif);font-size:12px;letter-spacing:.24em;color:var(--ink-2);
+    z-index:6;transition:opacity .3s;text-align:center;
+  }
+  .startmask.hide{opacity:0;pointer-events:none}
+  .fieldwrap{position:relative;width:min(100%,380px)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXVII · Whack-a-Mole</div>
+      <h1>打地鼠</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="hud"><span>得分 <b id="uiScore2">0</b></span><span>剩余 <b class="t" id="uiTime">30</b> 秒</span></div>
+    <div class="fieldwrap">
+      <div class="field" id="field"></div>
+      <div class="startmask" id="mask">点「开始」<br>三十秒内能敲几只</div>
+    </div>
+    <div class="plinth">
+      <span>最高 <b id="uiBest">0</b> 分</span>
+      <span class="r" id="uiState">准备</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const field = document.getElementById('field');
+  const mask = document.getElementById('mask');
+  const uiScore = document.getElementById('uiScore');
+  const uiScore2 = document.getElementById('uiScore2');
+  const uiTime = document.getElementById('uiTime');
+  const uiBest = document.getElementById('uiBest');
+  const uiState = document.getElementById('uiState');
+
+  const HOLES = 9;
+  const DURATION = 30;
+
+  const S = { holes: [], score: 0, time: DURATION, running: false, spawn: 0, tick: 0, spawned: 0 };
+
+  function save(){ return Store.get('save.whack', {}) || {}; }
+
+  function build(){
+    field.innerHTML = '';
+    S.holes = [];
+    for(let i = 0; i < HOLES; i++){
+      const b = document.createElement('button');
+      b.className = 'hole';
+      b.dataset.i = i;
+      b.innerHTML =
+        '<div class="mole">' +
+          '<div class="body"></div>' +
+          '<div class="ear l"></div><div class="ear r"></div>' +
+          '<div class="eye l"></div><div class="eye r"></div>' +
+          '<div class="snout"></div><div class="nose"></div>' +
+        '</div>';
+      const hole = { el: b, active: false, timer: 0 };
+      b.addEventListener('click', () => hit(hole));
+      field.appendChild(b);
+      S.holes.push(hole);
+    }
+  }
+
+  function up(hole){
+    hole.active = true;
+    hole.el.classList.add('up');
+    const life = Math.max(520, 1150 - S.spawned * 12);
+    hole.timer = setTimeout(() => down(hole), life);
+  }
+
+  function down(hole){
+    hole.active = false;
+    hole.el.classList.remove('up');
+    clearTimeout(hole.timer);
+    hole.timer = 0;
+  }
+
+  function hit(hole){
+    if(!S.running) return;
+    if(!hole.active) return;
+    hole.active = false;
+    clearTimeout(hole.timer);
+    hole.el.classList.remove('up');
+    const mole = hole.el.querySelector('.mole');
+    mole.classList.add('hit');
+    setTimeout(() => mole.classList.remove('hit'), 240);
+    S.score += 10;
+    uiScore.textContent = S.score;
+    uiScore2.textContent = S.score;
+    Sound.tone(520 + Math.random() * 160, .06, 'triangle', .09);
+    haptic(9);
+    Shell.floatNum(hole.el, '+10');
+  }
+
+  function spawnLoop(){
+    if(!S.running) return;
+    const free = S.holes.filter(h => !h.active);
+    if(free.length){
+      // 一次可能同时冒出两只，越到后面越密
+      const count = S.time < DURATION - 12 && Math.random() < 0.35 ? 2 : 1;
+      for(let k = 0; k < count && free.length; k++){
+        const idx = Shell.rand(free.length);
+        up(free[idx]);
+        free.splice(idx, 1);
+        S.spawned++;
+      }
+    }
+    const gap = Math.max(320, 820 - S.spawned * 16);
+    S.spawn = setTimeout(spawnLoop, gap * (0.7 + Math.random() * 0.6));
+  }
+
+  function start(){
+    if(S.running) return;
+    S.score = 0; S.time = DURATION; S.spawned = 0; S.running = true;
+    uiScore.textContent = '0';
+    uiScore2.textContent = '0';
+    uiTime.textContent = DURATION;
+    uiState.textContent = '敲';
+    mask.classList.add('hide');
+    S.holes.forEach(down);
+    spawnLoop();
+    clearInterval(S.tick);
+    S.tick = setInterval(() => {
+      S.time--;
+      uiTime.textContent = Math.max(0, S.time);
+      if(S.time <= 0) end();
+    }, 1000);
+  }
+
+  function end(){
+    S.running = false;
+    clearInterval(S.tick);
+    clearTimeout(S.spawn);
+    S.holes.forEach(down);
+    mask.classList.remove('hide');
+    mask.innerHTML = '游戏结束<br>' + S.score + ' 分';
+    uiState.textContent = '结束';
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.whack', sv);
+    uiBest.textContent = sv.best || 0;
+    if(good) { Sound.win(); } else Sound.done();
+    setTimeout(() => {
+      plate({
+        kicker: 'TIME UP',
+        title: good ? '刷新最高' : '时间到',
+        sub: S.score + ' 分 · 最高 ' + (sv.best || 0) + ' 分',
+        stars: S.score >= 400 ? 3 : S.score >= 250 ? 2 : S.score >= 120 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 400);
+  }
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  build();
+  uiBest.textContent = (save().best || 0);
+})();
+</script>
+</body>
+</html>

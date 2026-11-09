@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>数独 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .board{
+    position:relative;width:min(100%,420px);aspect-ratio:1/1;
+    display:grid;grid-template-columns:repeat(9,1fr);grid-template-rows:repeat(9,1fr);
+    background:var(--paper-hi);
+    border:1.5px solid var(--ink);
+    box-shadow:var(--sh-deep);
+  }
+  .sc{
+    appearance:none;border:0;background:transparent;padding:0;cursor:pointer;
+    display:grid;place-items:center;position:relative;
+    font-family:var(--serif);font-size:clamp(14px,4.2vw,20px);
+    font-variant-numeric:tabular-nums;color:var(--ink);
+    transition:background .12s;
+    box-shadow:inset -1px 0 0 rgba(31,28,22,.13), inset 0 -1px 0 rgba(31,28,22,.13);
+    -webkit-tap-highlight-color:transparent;
+  }
+  /* 九宫格粗线 */
+  .sc[data-c="2"],.sc[data-c="5"]{box-shadow:inset -1.5px 0 0 rgba(31,28,22,.62), inset 0 -1px 0 rgba(31,28,22,.13)}
+  .sc[data-r="2"],.sc[data-r="5"]{box-shadow:inset -1px 0 0 rgba(31,28,22,.13), inset 0 -1.5px 0 rgba(31,28,22,.62)}
+  .sc[data-r="2"][data-c="2"],.sc[data-r="2"][data-c="5"],
+  .sc[data-r="5"][data-c="2"],.sc[data-r="5"][data-c="5"]{
+    box-shadow:inset -1.5px 0 0 rgba(31,28,22,.62), inset 0 -1.5px 0 rgba(31,28,22,.62);
+  }
+  .sc.given{color:var(--ink);font-weight:600}
+  .sc.user{color:var(--accent-2)}
+  .sc.sel{background:rgba(180,64,44,.10);box-shadow:inset 0 0 0 1.5px var(--accent)}
+  .sc.peer{background:rgba(31,28,22,.045)}
+  .sc.same{background:rgba(180,64,44,.09)}
+  .sc.bad{color:var(--accent)}
+  .sc.bad::after{
+    content:"";position:absolute;inset:16%;border:1px solid rgba(180,64,44,.5);border-radius:50%;
+  }
+  .sc.pop{animation:pop .24s var(--ease)}
+  @keyframes pop{0%{transform:scale(.72);opacity:.4}100%{transform:none;opacity:1}}
+  .pad{display:grid;grid-template-columns:repeat(9,1fr);gap:5px;width:min(100%,420px);margin-top:2px}
+  .pad button{
+    appearance:none;border:1px solid var(--line-2);background:var(--paper-hi);color:var(--ink);
+    aspect-ratio:1/1.75;font-family:var(--serif);font-size:clamp(16px,4.8vw,22px);
+    cursor:pointer;border-radius:2px;box-shadow:inset 0 1px 0 rgba(255,255,255,.7);
+    transition:background .12s,transform .08s,opacity .15s;position:relative;
+  }
+  .pad button:active{transform:translateY(1px);background:rgba(31,28,22,.06)}
+  .pad button.done{opacity:.3}
+  .pad button b{
+    position:absolute;right:2px;bottom:1px;font-size:8px;font-family:var(--sans);
+    color:var(--ink-3);font-weight:400;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XII · Sudoku</div>
+      <h1>数独</h1>
+    </div>
+    <div class="bar__meta">空 <b id="uiLeft">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span>余 <b id="uiLeft2">0</b> 格 · <span id="uiDiff">普通</span></span>
+      <span class="r" id="uiTime">00:00</span>
+    </div>
+    <div class="pad" id="pad"></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segDiff">
+      <button data-k="0">简单</button>
+      <button data-k="1">普通</button>
+      <button data-k="2">困难</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新局
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic, fmtTime } = Shell;
+
+  const boardEl = document.getElementById('board');
+  const padEl = document.getElementById('pad');
+  const uiLeft = document.getElementById('uiLeft');
+  const uiLeft2 = document.getElementById('uiLeft2');
+  const uiDiff = document.getElementById('uiDiff');
+  const uiTime = document.getElementById('uiTime');
+  const segDiff = document.getElementById('segDiff');
+
+  const DIFF = [
+    { name: '简单', holes: 34 },
+    { name: '普通', holes: 44 },
+    { name: '困难', holes: 52 }
+  ];
+
+  const S = {
+    k: 1, g: [], given: [], sel: -1,
+    els: [], sec: 0, timer: 0, done: false, hints: 0
+  };
+
+  const ri = i => (i / 9) | 0;
+  const ci = i => i % 9;
+  const boxOf = i => (((ri(i) / 3) | 0) * 3 + ((ci(i) / 3) | 0));
+
+  function save(){ return Store.get('save.sudoku', {}) || {}; }
+
+  /* ---------- 生成完整解 ---------- */
+  function canPut(g, i, v){
+    const r = ri(i), c = ci(i), b = boxOf(i);
+    for(let k = 0; k < 81; k++){
+      if(g[k] !== v) continue;
+      if(ri(k) === r || ci(k) === c || boxOf(k) === b) return false;
+    }
+    return true;
+  }
+  function fill(g, i){
+    if(i >= 81) return true;
+    if(g[i]) return fill(g, i + 1);
+    const order = Shell.shuffle([1,2,3,4,5,6,7,8,9]);
+    for(let t = 0; t < 9; t++){
+      const v = order[t];
+      if(canPut(g, i, v)){
+        g[i] = v;
+        if(fill(g, i + 1)) return true;
+        g[i] = 0;
+      }
+    }
+    return false;
+  }
+  /* 数解：最多数到 limit，用于确认唯一 */
+  function countSol(g, limit){
+    let idx = -1, best = 10, cands = null;
+    for(let i = 0; i < 81; i++){
+      if(g[i]) continue;
+      const list = [];
+      for(let v = 1; v <= 9; v++) if(canPut(g, i, v)) list.push(v);
+      if(list.length < best){ best = list.length; idx = i; cands = list; if(best <= 1) break; }
+    }
+    if(idx < 0) return 1;
+    if(!cands.length) return 0;
+    let total = 0;
+    for(const v of cands){
+      g[idx] = v;
+      total += countSol(g, limit - total);
+      g[idx] = 0;
+      if(total >= limit) break;
+    }
+    return total;
+  }
+
+  function makePuzzle(holes){
+    const sol = new Array(81).fill(0);
+    fill(sol, 0);
+    const puz = sol.slice();
+    const order = Shell.shuffle([...Array(81).keys()]);
+    let removed = 0;
+    const t0 = Date.now();
+    for(const i of order){
+      if(removed >= holes) break;
+      if(Date.now() - t0 > 900) break;      // 时间预算，宁可少挖几格
+      const keep = puz[i];
+      puz[i] = 0;
+      const probe = puz.slice();
+      if(countSol(probe, 2) !== 1){ puz[i] = keep; }
+      else removed++;
+    }
+    return { puz, sol };
+  }
+
+  function build(){
+    boardEl.innerHTML = '';
+    S.els = [];
+    for(let i = 0; i < 81; i++){
+      const b = document.createElement('button');
+      b.className = 'sc';
+      b.dataset.r = ri(i); b.dataset.c = ci(i);
+      b.addEventListener('click', () => select(i));
+      boardEl.appendChild(b);
+      S.els.push(b);
+    }
+  }
+
+  function paintCell(i){
+    const el = S.els[i];
+    const v = S.g[i];
+    el.textContent = v ? v : '';
+    el.className = 'sc' + (S.given[i] ? ' given' : ' user');
+    if(v && !S.given[i] && !validAt(i)) el.classList.add('bad');
+  }
+
+  function validAt(i){
+    const v = S.g[i];
+    if(!v) return true;
+    for(let k = 0; k < 81; k++){
+      if(k === i || S.g[k] !== v) continue;
+      if(ri(k) === ri(i) || ci(k) === ci(i) || boxOf(k) === boxOf(i)) return false;
+    }
+    return true;
+  }
+
+  function paintAll(){
+    for(let i = 0; i < 81; i++) paintCell(i);
+    if(S.sel >= 0){
+      const r = ri(S.sel), c = ci(S.sel), b = boxOf(S.sel), v = S.g[S.sel];
+      for(let i = 0; i < 81; i++){
+        if(i === S.sel){ S.els[i].classList.add('sel'); continue; }
+        if(ri(i) === r || ci(i) === c || boxOf(i) === b) S.els[i].classList.add('peer');
+        if(v && S.g[i] === v) S.els[i].classList.add('same');
+      }
+    }
+    let left = 0;
+    for(let i = 0; i < 81; i++) if(!S.g[i]) left++;
+    uiLeft.textContent = left;
+    uiLeft2.textContent = left;
+    uiDiff.textContent = DIFF[S.k].name;
+    // 数字键盘上标记已用完的数
+    Array.prototype.forEach.call(padEl.children, btn => {
+      const d = +btn.dataset.d;
+      let cnt = 0;
+      for(let i = 0; i < 81; i++) if(S.g[i] === d) cnt++;
+      btn.classList.toggle('done', cnt >= 9);
+    });
+  }
+
+  function select(i){
+    if(S.done) return;
+    S.sel = i;
+    Sound.tone(500 + (S.g[i] || 0) * 20, .035, 'sine', .04);
+    paintAll();
+  }
+
+  function put(v){
+    if(S.done || S.sel < 0 || S.given[S.sel]) return;
+    if(S.g[S.sel] === v){ S.g[S.sel] = 0; }
+    else S.g[S.sel] = v;
+    const el = S.els[S.sel];
+    el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop');
+    Sound.tone(520 + v * 34, .07, 'triangle', .08);
+    haptic(7);
+    paintAll();
+    checkWin();
+  }
+
+  function checkWin(){
+    for(let i = 0; i < 81; i++){
+      if(!S.g[i] || !validAt(i)) return;
+    }
+    S.done = true;
+    clearInterval(S.timer); S.timer = 0;
+    Sound.win(); haptic([10, 30, 12]);
+    Shell.flash(boardEl, 460);
+    const sv = save();
+    const key = 'best' + S.k;
+    const good = !sv[key] || S.sec < sv[key];
+    if(good) sv[key] = S.sec;
+    sv.plays = (sv.plays || 0) + 1;
+    sv.wins = (sv.wins || 0) + 1;
+    Store.set('save.sudoku', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'SOLVED',
+        title: good ? '刷新最快' : '全部填满',
+        sub: DIFF[S.k].name + ' · ' + fmtTime(S.sec),
+        stars: S.k === 2 ? 3 : S.k === 1 ? 2 : 1,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function startTimer(){
+    clearInterval(S.timer);
+    S.timer = setInterval(() => { S.sec++; uiTime.textContent = fmtTime(S.sec); }, 1000);
+  }
+
+  function newGame(){
+    clearInterval(S.timer); S.timer = 0;
+    S.sec = 0; S.done = false; S.sel = 40;
+    uiTime.textContent = '00:00';
+    const { puz, sol } = makePuzzle(DIFF[S.k].holes);
+    S.g = puz.slice();
+    S.given = puz.map(v => v > 0);
+    S.sol = sol;
+    build();
+    paintAll();
+    startTimer();
+  }
+
+  /* ---------- 键盘 ---------- */
+  function buildPad(){
+    padEl.innerHTML = '';
+    for(let d = 1; d <= 9; d++){
+      const b = document.createElement('button');
+      b.dataset.d = d;
+      b.innerHTML = d + '<b></b>';
+      b.addEventListener('click', () => put(d));
+      padEl.appendChild(b);
+    }
+    const del = document.createElement('button');
+    del.dataset.d = 0;
+  }
+  buildPad();
+
+  document.addEventListener('keydown', e => {
+    if(e.key >= '1' && e.key <= '9'){ put(+e.key); e.preventDefault(); return; }
+    if(e.key === 'Backspace' || e.key === 'Delete' || e.key === '0'){ put(0); e.preventDefault(); return; }
+    const v = S.sel;
+    if(v < 0) return;
+    if(e.key === 'ArrowLeft'){ S.sel = ri(v) * 9 + Math.max(0, ci(v) - 1); paintAll(); e.preventDefault(); }
+    if(e.key === 'ArrowRight'){ S.sel = ri(v) * 9 + Math.min(8, ci(v) + 1); paintAll(); e.preventDefault(); }
+    if(e.key === 'ArrowUp'){ S.sel = Math.max(0, ri(v) - 1) * 9 + ci(v); paintAll(); e.preventDefault(); }
+    if(e.key === 'ArrowDown'){ S.sel = Math.min(8, ri(v) + 1) * 9 + ci(v); paintAll(); e.preventDefault(); }
+  });
+
+  Array.prototype.forEach.call(segDiff.children, b => {
+    b.addEventListener('click', () => {
+      S.k = +b.dataset.k;
+      Array.prototype.forEach.call(segDiff.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.k = Math.min(2, Math.max(0, (save().k | 0)));
+  Array.prototype.forEach.call(segDiff.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.k === S.k));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

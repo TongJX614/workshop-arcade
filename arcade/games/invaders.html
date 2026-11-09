@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>太空侵略者 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,380px);aspect-ratio:3/4;
+    background:#FBF8F1;border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.05);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXIX · Invaders</div>
+      <h1>太空侵略者</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">左右移动，点屏幕开火<br>守住底线</div>
+    </div>
+    <div class="plinth">
+      <span>命 <b id="uiLives">3</b> · 第 <span id="uiWave">1</span> 波</span>
+      <span class="r" id="uiBest">最高 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiLives = document.getElementById('uiLives');
+  const uiWave = document.getElementById('uiWave');
+  const uiBest = document.getElementById('uiBest');
+
+  const W = 360, H = 480;
+  const COLS = 8, ROWS = 5, EW = 24, EH = 18, GX = 8, GY = 7;
+  const TOP = 54, LEFT = 30;
+
+  const S = {
+    px: W / 2, lives: 3, score: 0, wave: 1,
+    enemies: [], ox: 0, oy: 0, dir: 1, speed: 26,
+    bullets: [], ebullets: [],
+    running: false, done: false, last: 0, cool: 0, efire: 0, keys: {}
+  };
+
+  function save(){ return Store.get('save.invaders', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  function makeWave(){
+    S.enemies = [];
+    for(let r = 0; r < ROWS; r++) for(let c = 0; c < COLS; c++){
+      S.enemies.push({ r, c, alive: true, x: LEFT + c * (EW + GX), y: TOP + r * (EH + GY) });
+    }
+    S.ox = 0; S.oy = 0; S.dir = 1;
+    S.speed = 24 + S.wave * 8;
+    S.ebullets = [];
+    S.bullets = [];
+    tip.classList.add('hide');
+    uiWave.textContent = S.wave;
+  }
+
+  function start(){
+    S.lives = 3; S.score = 0; S.wave = 1; S.done = false;
+    S.px = W / 2;
+    updateHud();
+    makeWave();
+    S.running = true;
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function updateHud(){
+    uiScore.textContent = S.score;
+    uiLives.textContent = S.lives;
+    const sv = save();
+    uiBest.textContent = sv.best ? '最高 ' + sv.best : '—';
+  }
+
+  function fire(){
+    if(!S.running) return;
+    const now = performance.now();
+    if(now - S.cool < 220) return;
+    S.cool = now;
+    S.bullets.push({ x: S.px, y: H - 44 });
+    Sound.tone(760, .04, 'square', .05);
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.034, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+
+    if(S.keys.left) S.px -= 300 * dt;
+    if(S.keys.right) S.px += 300 * dt;
+    S.px = Math.max(18, Math.min(W - 18, S.px));
+
+    // 敌阵移动
+    let minX = 1e9, maxX = -1e9, aliveN = 0;
+    for(const e of S.enemies){
+      if(!e.alive) continue;
+      aliveN++;
+      const x = e.x + S.ox;
+      if(x < minX) minX = x;
+      if(x + EW > maxX) maxX = x + EW;
+    }
+    if(!aliveN){
+      S.wave++;
+      S.score += 60;
+      updateHud();
+      Sound.done();
+      makeWave();
+      return requestAnimationFrame(loop);
+    }
+    // 越少越快
+    const spd = S.speed * (3.2 - aliveN / (COLS * ROWS) * 2.1);
+    S.ox += S.dir * spd * dt;
+    if(maxX + S.dir * spd * dt > W - 12 && S.dir > 0){ S.dir = -1; S.oy += 13; }
+    if(minX + S.dir * spd * dt < 12 && S.dir < 0){ S.dir = 1; S.oy += 13; }
+
+    // 触碰底线
+    for(const e of S.enemies){
+      if(e.alive && e.y + S.oy + EH >= H - 54){ gameOver(); return; }
+    }
+
+    // 玩家子弹
+    S.bullets = S.bullets.filter(b => {
+      b.y -= 460 * dt;
+      if(b.y < -10) return false;
+      for(const e of S.enemies){
+        if(!e.alive) continue;
+        const ex = e.x + S.ox, ey = e.y + S.oy;
+        if(b.x > ex && b.x < ex + EW && b.y > ey && b.y < ey + EH){
+          e.alive = false;
+          S.score += 10 * (ROWS - e.r);
+          updateHud();
+          Sound.tone(420 + e.r * 40, .06, 'square', .07);
+          haptic(5);
+          return false;
+        }
+      }
+      return true;
+    });
+
+    // 敌人子弹
+    S.efire += dt;
+    if(S.efire > Math.max(0.42, 1.4 - S.wave * 0.12)){
+      S.efire = 0;
+      const alive = S.enemies.filter(e => e.alive);
+      if(alive.length){
+        const e = alive[Shell.rand(alive.length)];
+        S.ebullets.push({ x: e.x + S.ox + EW / 2, y: e.y + S.oy + EH });
+      }
+    }
+    S.ebullets = S.ebullets.filter(b => {
+      b.y += 210 * dt;
+      if(b.y > H) return false;
+      if(Math.abs(b.x - S.px) < 14 && b.y > H - 58 && b.y < H - 24){
+        hurt();
+        return false;
+      }
+      return true;
+    });
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function hurt(){
+    S.lives--;
+    updateHud();
+    Sound.lose();
+    haptic([12, 40]);
+    S.ebullets = [];
+    S.px = W / 2;
+    if(S.lives <= 0) gameOver();
+  }
+
+  function gameOver(){
+    S.running = false;
+    S.done = true;
+    Sound.lose();
+    const sv = save();
+    if(S.score > (sv.best || 0)) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.invaders', sv);
+    updateHud();
+    setTimeout(() => {
+      plate({
+        kicker: 'GAME OVER',
+        title: '阵线被突破了',
+        sub: S.score + ' 分 · 第 ' + S.wave + ' 波',
+        stars: S.score >= 600 ? 3 : S.score >= 300 ? 2 : S.score >= 120 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#FBF8F1';
+    ctx.fillRect(0, 0, W, H);
+
+    // 星点
+    ctx.fillStyle = 'rgba(31,28,22,.10)';
+    for(let i = 0; i < 26; i++){
+      const x = (i * 97 % W), y = (i * 61 % (H - 60));
+      ctx.fillRect(x, y, 1.5, 1.5);
+    }
+
+    // 底线
+    ctx.strokeStyle = 'rgba(180,64,44,.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H - 20); ctx.lineTo(W, H - 20); ctx.stroke();
+
+    // 敌机
+    const hues = ['#B4402C', '#2A241C', '#9C7F37', '#5F7A6A', '#7A6A92'];
+    for(const e of S.enemies){
+      if(!e.alive) continue;
+      const x = e.x + S.ox, y = e.y + S.oy;
+      ctx.fillStyle = hues[e.r % hues.length];
+      // 机身：两段梯形
+      ctx.beginPath();
+      ctx.moveTo(x + 3, y + EH);
+      ctx.lineTo(x + EW - 3, y + EH);
+      ctx.lineTo(x + EW - 6, y + 2);
+      ctx.lineTo(x + 6, y + 2);
+      ctx.closePath();
+      ctx.fill();
+      // 眼睛
+      ctx.fillStyle = 'rgba(255,255,255,.85)';
+      ctx.fillRect(x + 7, y + 6, 3, 3);
+      ctx.fillRect(x + EW - 10, y + 6, 3, 3);
+      // 天线
+      ctx.strokeStyle = 'rgba(31,28,22,.5)';
+      ctx.beginPath();
+      ctx.moveTo(x + EW / 2, y + 2); ctx.lineTo(x + EW / 2, y - 3);
+      ctx.stroke();
+    }
+
+    // 玩家
+    const px = S.px, py = H - 34;
+    ctx.fillStyle = '#1F1C16';
+    ctx.beginPath();
+    ctx.moveTo(px, py - 16);
+    ctx.lineTo(px + 15, py);
+    ctx.lineTo(px + 7, py);
+    ctx.lineTo(px + 7, py + 4);
+    ctx.lineTo(px - 7, py + 4);
+    ctx.lineTo(px - 7, py);
+    ctx.lineTo(px - 15, py);
+    ctx.closePath();
+    ctx.fill();
+
+    // 子弹
+    ctx.fillStyle = '#B4402C';
+    for(const b of S.bullets) ctx.fillRect(b.x - 1, b.y - 8, 2, 9);
+    ctx.fillStyle = 'rgba(31,28,22,.75)';
+    for(const b of S.ebullets){
+      ctx.fillRect(b.x - 1, b.y, 2, 8);
+    }
+  }
+
+  /* 操作 */
+  function moveTo(clientX){
+    const rect = frame.getBoundingClientRect();
+    S.px = Math.max(18, Math.min(W - 18, (clientX - rect.left) / rect.width * W));
+  }
+  frame.addEventListener('pointermove', e => { if(S.running) moveTo(e.clientX); });
+  frame.addEventListener('pointerdown', e => {
+    if(!S.running) return;
+    moveTo(e.clientX);
+    fire();
+  });
+  document.addEventListener('keydown', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = true;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = true;
+    if(e.key === ' '){ e.preventDefault(); if(!S.running && !S.done) start(); else fire(); }
+  });
+  document.addEventListener('keyup', e => {
+    if(e.key === 'ArrowLeft' || e.key === 'a') S.keys.left = false;
+    if(e.key === 'ArrowRight' || e.key === 'd') S.keys.right = false;
+  });
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  // 初始摆一个静止的阵型做预览
+  S.enemies = [];
+  for(let r = 0; r < ROWS; r++) for(let c = 0; c < COLS; c++){
+    S.enemies.push({ r, c, alive: true, x: LEFT + c * (EW + GX), y: TOP + r * (EH + GY) });
+  }
+  draw();
+})();
+</script>
+</body>
+</html>

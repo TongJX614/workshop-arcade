@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>投篮 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,400px);aspect-ratio:3/4;
+    background:linear-gradient(180deg,#FDFAF3,#EDE4D2);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.04);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXIII · Hoops</div>
+      <h1>投篮</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">从球上往斜上方拉<br>松手投出去</div>
+    </div>
+    <div class="plinth">
+      <span>命中 <b id="uiHit">0</b> / <span id="uiShot">0</span> 投</span>
+      <span class="r" id="uiTime">60 秒</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiHit = document.getElementById('uiHit');
+  const uiShot = document.getElementById('uiShot');
+  const uiTime = document.getElementById('uiTime');
+
+  const W = 340, H = 452;
+  const BX = 68, BY = H - 74;
+  const RIM_X = W - 92, RIM_Y = 176, RIM_W = 58;
+  const GRAV = 1180;
+
+  const S = {
+    ball: { x: BX, y: BY, vx: 0, vy: 0, flying: false, scored: false },
+    aiming: false, aim: { x: BX, y: BY - 60 },
+    score: 0, hits: 0, shots: 0, time: 60,
+    running: false, last: 0, resetT: 0, done: false, msg: '', msgT: 0
+  };
+
+  function save(){ return Store.get('save.hoops', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  function hud(){
+    uiScore.textContent = S.score;
+    uiHit.textContent = S.hits;
+    uiShot.textContent = S.shots;
+    uiTime.textContent = S.time + ' 秒';
+  }
+
+  function reset(){
+    S.ball = { x: BX, y: BY, vx: 0, vy: 0, flying: false, scored: false };
+    S.score = 0; S.hits = 0; S.shots = 0; S.time = 60; S.done = false;
+    S.msg = ''; S.msgT = 0;
+    tip.classList.remove('hide');
+    hud();
+  }
+
+  function start(){
+    reset();
+    S.running = true;
+    tip.classList.add('hide');
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function shoot(){
+    const dx = S.aim.x - S.ball.x;
+    const dy = S.aim.y - S.ball.y;
+    // 只能往上投
+    if(dy > -30) { S.aiming = false; return; }
+    const power = Math.min(1, Math.hypot(dx, dy) / 210);
+    const ang = Math.atan2(dy, dx);
+    const sp = 430 + power * 420;
+    S.ball.vx = Math.cos(ang) * sp;
+    S.ball.vy = Math.sin(ang) * sp;
+    S.ball.flying = true;
+    S.ball.scored = false;
+    S.shots++;
+    hud();
+    Sound.tone(300, .06, 'triangle', .07);
+    haptic(7);
+    S.aiming = false;
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.032, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+    if(S.msgT > 0) S.msgT -= dt;
+
+    const b = S.ball;
+    if(b.flying){
+      b.vy += GRAV * dt;
+      b.x += b.vx * dt;
+      b.y += b.vy * dt;
+
+      // 进球判定：球心从上往下穿过筐口
+      const inX = b.x > RIM_X + 6 && b.x < RIM_X + RIM_W - 6;
+      if(!b.scored && b.vy > 0 && inX && b.y > RIM_Y && b.y < RIM_Y + 18){
+        b.scored = true;
+        S.score += 2;
+        S.hits++;
+        S.msg = '进！';
+        S.msgT = 1.1;
+        Sound.win();
+        haptic([8, 24, 8]);
+        Shell.floatNum(frame, '+2', '');
+        hud();
+      }
+      // 碰到边框弹开（简化：左右侧壁）
+      if(b.x < 12 || b.x > W - 12){ b.vx *= -0.62; b.x = Math.max(12, Math.min(W - 12, b.x)); }
+      if(b.y < 8){ b.vy = Math.abs(b.vy) * 0.5; }
+      // 框边碰撞（横杆两端）
+      if(b.y > RIM_Y - 6 && b.y < RIM_Y + 8 && (Math.abs(b.x - RIM_X) < 7 || Math.abs(b.x - (RIM_X + RIM_W)) < 7)){
+        if(!b.scored){ b.vx *= -0.5; b.vy *= 0.6; Sound.tone(220, .05, 'square', .05); }
+      }
+
+      // 落地
+      if(b.y > H - 26 || b.x < 4 || b.x > W - 4){
+        b.flying = false;
+        S.resetT = 0.55;
+      }
+    }else if(S.resetT > 0){
+      S.resetT -= dt;
+      if(S.resetT <= 0){
+        b.x = BX; b.y = BY; b.vx = 0; b.vy = 0;
+        S.aim = { x: BX, y: BY - 70 };
+      }
+    }
+
+    S.time -= dt;
+    if(S.time <= 0){
+      S.time = 0;
+      hud();
+      over();
+      return;
+    }
+    uiTime.textContent = Math.ceil(S.time) + ' 秒';
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function over(){
+    S.running = false;
+    S.done = true;
+    Sound.done();
+    const acc = S.shots ? Math.round(S.hits / S.shots * 100) : 0;
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.hoops', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'TIME UP',
+        title: good ? '刷新最高' : '时间到',
+        sub: S.score + ' 分 · ' + S.hits + '/' + S.shots + ' 投 · 命中率 ' + acc + '%',
+        stars: S.score >= 20 ? 3 : S.score >= 12 ? 2 : S.score >= 6 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+
+    // 地板
+    ctx.fillStyle = '#E6DCC6';
+    ctx.fillRect(0, H - 22, W, 22);
+    ctx.strokeStyle = 'rgba(31,28,22,.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H - 22); ctx.lineTo(W, H - 22); ctx.stroke();
+
+    // 篮板
+    ctx.fillStyle = 'rgba(251,248,241,.9)';
+    ctx.fillRect(RIM_X + RIM_W - 8, RIM_Y - 92, 8, 108);
+    ctx.strokeStyle = 'rgba(31,28,22,.22)';
+    ctx.strokeRect(RIM_X + RIM_W - 8, RIM_Y - 92, 8, 108);
+    // 篮板方块
+    ctx.strokeStyle = 'rgba(180,64,44,.5)';
+    ctx.strokeRect(RIM_X + RIM_W - 6, RIM_Y - 42, 1, 34);
+
+    // 篮筐
+    ctx.strokeStyle = '#B4402C';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(RIM_X, RIM_Y);
+    ctx.lineTo(RIM_X + RIM_W, RIM_Y);
+    ctx.stroke();
+
+    // 网
+    ctx.strokeStyle = 'rgba(31,28,22,.30)';
+    ctx.lineWidth = 1;
+    for(let i = 0; i <= 6; i++){
+      const x = RIM_X + i * RIM_W / 6;
+      ctx.beginPath();
+      ctx.moveTo(x, RIM_Y);
+      ctx.lineTo(RIM_X + RIM_W / 2 + (x - (RIM_X + RIM_W / 2)) * 0.55, RIM_Y + 30);
+      ctx.stroke();
+    }
+    for(let i = 1; i <= 2; i++){
+      const y = RIM_Y + i * 11;
+      const inset = i * 8;
+      ctx.beginPath();
+      ctx.moveTo(RIM_X + inset, y);
+      ctx.lineTo(RIM_X + RIM_W - inset, y);
+      ctx.stroke();
+    }
+
+    // 瞄准线
+    if(S.aiming && !S.ball.flying){
+      const dx = S.aim.x - S.ball.x, dy = S.aim.y - S.ball.y;
+      const power = Math.min(1, Math.hypot(dx, dy) / 210);
+      ctx.strokeStyle = 'rgba(180,64,44,' + (0.25 + power * 0.4) + ')';
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([5, 6]);
+      ctx.beginPath();
+      ctx.moveTo(S.ball.x, S.ball.y);
+      ctx.lineTo(S.aim.x, S.aim.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // 预判轨迹
+      const ang = Math.atan2(dy, dx);
+      const sp = 430 + power * 420;
+      let px = S.ball.x, py = S.ball.y, vx = Math.cos(ang) * sp, vy = Math.sin(ang) * sp;
+      ctx.fillStyle = 'rgba(180,64,44,.24)';
+      for(let i = 0; i < 26; i++){
+        vy += GRAV * 0.03;
+        px += vx * 0.03; py += vy * 0.03;
+        if(py > H - 20 || px > W) break;
+        ctx.beginPath(); ctx.arc(px, py, 1.6, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    // 球
+    const b = S.ball;
+    const g = ctx.createRadialGradient(b.x - 5, b.y - 6, 2, b.x, b.y, 14);
+    g.addColorStop(0, '#E08B62');
+    g.addColorStop(1, '#A5351F');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 13, 0, Math.PI * 2); ctx.fill();
+    // 球纹
+    ctx.strokeStyle = 'rgba(31,28,22,.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(b.x, b.y, 13, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(b.x - 13, b.y); ctx.lineTo(b.x + 13, b.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(b.x, b.y - 13); ctx.lineTo(b.x, b.y + 13); ctx.stroke();
+
+    // 提示字
+    if(S.msgT > 0){
+      ctx.fillStyle = 'rgba(180,64,44,' + Math.min(1, S.msgT) + ')';
+      ctx.font = '600 30px Georgia, serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(S.msg, W / 2, 100);
+    }
+  }
+
+  /* 操作 */
+  function pos(e){
+    const r = frame.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+  }
+  frame.addEventListener('pointerdown', e => {
+    if(!S.running || S.ball.flying) return;
+    S.aiming = true;
+    S.aim = pos(e);
+  });
+  frame.addEventListener('pointermove', e => {
+    if(!S.aiming) return;
+    S.aim = pos(e);
+  });
+  frame.addEventListener('pointerup', e => {
+    if(!S.aiming) return;
+    S.aim = pos(e);
+    shoot();
+  });
+  frame.addEventListener('pointercancel', () => { S.aiming = false; });
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+  draw();
+})();
+</script>
+</body>
+</html>

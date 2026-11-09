@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>找不同 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:10px}
+  .panel{
+    position:relative;width:min(100%,400px,calc((100dvh - 340px) * 4 / 6));aspect-ratio:4/3;
+    display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(3,1fr);
+    background:#FBF8F1;border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 30px rgba(31,28,22,.03);
+  }
+  .panel + .panel{margin-top:2px}
+  /* 宽屏上不必迁就一屏放下，画大一点更好找 */
+  @media (min-width:620px){
+    .panel{width:min(100%,380px);max-height:calc((100dvh - 300px) / 2)}
+  }
+  .tag{
+    position:absolute;left:6px;top:5px;z-index:3;
+    font-family:var(--serif);font-size:8px;letter-spacing:.24em;color:var(--ink-3);
+    text-transform:uppercase;pointer-events:none;
+  }
+  .cell{
+    appearance:none;border:0;background:transparent;padding:0;cursor:default;
+    display:grid;place-items:center;position:relative;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .panel.right .cell{cursor:pointer}
+  .cell svg{width:76%;height:76%;overflow:visible}
+  .cell.found::after{
+    content:"";position:absolute;inset:12%;border:1.5px solid var(--accent);border-radius:50%;
+    animation:ring .38s var(--ease) backwards;
+  }
+  @keyframes ring{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:none}}
+  .cell.miss{animation:shake .3s ease}
+  @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  .hud{display:flex;align-items:baseline;gap:18px;font-family:var(--serif);font-size:10px;letter-spacing:.18em;color:var(--ink-3)}
+  .hud b{font-size:18px;color:var(--ink);font-weight:400;font-variant-numeric:tabular-nums}
+  .hud .t{color:var(--accent)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXVII · Spot the Difference</div>
+      <h1>找不同</h1>
+    </div>
+    <div class="bar__meta">关 <b id="uiLevel">1</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="hud"><span>找到 <b id="uiFound">0</b> / 3</span><span>错点 <b class="t" id="uiMiss">0</b></span></div>
+    <div class="panel" id="left"><span class="tag">原图</span></div>
+    <div class="panel right" id="right"><span class="tag">改动</span></div>
+    <div class="plinth">
+      <span>下面那张里有三处不一样</span>
+      <span class="r" id="uiState">找找看</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      换一张
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const leftEl = document.getElementById('left');
+  const rightEl = document.getElementById('right');
+  const uiFound = document.getElementById('uiFound');
+  const uiMiss = document.getElementById('uiMiss');
+  const uiLevel = document.getElementById('uiLevel');
+  const uiState = document.getElementById('uiState');
+
+  const COLORS = ['#B4402C', '#2A241C', '#9C7F37', '#2F6AB5'];
+  const S = { level: 1, cells: [], diffs: new Set(), found: new Set(), miss: 0, done: false };
+
+  function save(){ return Store.get('save.spot', {}) || {}; }
+
+  function shapeSvg(shape, color, scale){
+    const body = [
+      '<circle cx="50" cy="50" r="30" fill="' + color + '"/>',
+      '<rect x="20" y="20" width="60" height="60" rx="2" fill="' + color + '"/>',
+      '<path d="M50 14 L84 82 L16 82 Z" fill="' + color + '"/>',
+      '<path d="M50 12 L86 50 L50 88 L14 50 Z" fill="' + color + '"/>'
+    ][shape];
+    return '<svg viewBox="0 0 100 100"><g transform="translate(50 50) scale(' + scale + ') translate(-50 -50)">' + body + '</g></svg>';
+  }
+
+  function generate(){
+    S.base = [];
+    S.cells = [];
+    for(let i = 0; i < 12; i++){
+      const c = {
+        shape: Shell.rand(4),
+        color: COLORS[Shell.rand(COLORS.length)],
+        scale: 0.72 + Math.random() * 0.3
+      };
+      S.base.push({ shape: c.shape, color: c.color, scale: c.scale });
+      S.cells.push(c);
+    }
+    // 挑 3 处改动，保证确实有差别
+    S.diffs = new Set();
+    const idx = Shell.shuffle([...Array(12).keys()]);
+    for(const i of idx){
+      if(S.diffs.size >= 3) break;
+      const c = S.cells[i];
+      const kind = Shell.rand(3);
+      if(kind === 0){
+        const old = c.color;
+        const cand = COLORS.filter(x => x !== old);
+        c.color = cand[Shell.rand(cand.length)];
+        if(c.color === old) continue;
+      }else if(kind === 1){
+        const old = c.shape;
+        let s = Shell.rand(4);
+        if(s === old) s = (s + 1) % 4;
+        c.shape = s;
+      }else{
+        c.scale = c.scale > 0.86 ? 0.62 : 1.0;
+      }
+      S.diffs.add(i);
+    }
+    S.found = new Set();
+    S.miss = 0;
+    S.done = false;
+    uiFound.textContent = '0';
+    uiMiss.textContent = '0';
+    uiLevel.textContent = S.level;
+    uiState.textContent = '找找看';
+  }
+
+  function build(){
+    [[leftEl, false], [rightEl, true]].forEach(([host, isRight]) => {
+      Array.prototype.slice.call(host.querySelectorAll('.cell')).forEach(e => e.remove());
+      for(let i = 0; i < 12; i++){
+        // 左边永远画原始图案，右边画改动后的，否则两边一起变、根本找不出来
+        const c = isRight ? S.cells[i] : S.base[i];
+        const b = document.createElement('button');
+        b.className = 'cell';
+        b.dataset.i = i;
+        b.innerHTML = shapeSvg(c.shape, c.color, c.scale);
+        b.addEventListener('click', () => {
+          if(!isRight) return;
+          hit(i, b);
+        });
+        host.appendChild(b);
+      }
+    });
+  }
+
+  function hit(i, btn){
+    if(S.done) return;
+    if(!S.diffs.has(i)){
+      S.miss++;
+      uiMiss.textContent = S.miss;
+      btn.classList.remove('miss'); void btn.offsetWidth; btn.classList.add('miss');
+      Sound.bad();
+      haptic(8);
+      return;
+    }
+    if(S.found.has(i)) return;
+    S.found.add(i);
+    btn.classList.add('found');
+    Sound.tone(560 + S.found.size * 90, .08, 'sine', .09);
+    haptic([6, 18]);
+    uiFound.textContent = S.found.size;
+    if(S.found.size === 3) win();
+  }
+
+  function win(){
+    S.done = true;
+    uiState.textContent = '三处都找到了';
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(rightEl, 460);
+    S.level++;
+    const sv = save();
+    sv.plays = (sv.plays || 0) + 1;
+    sv.wins = (sv.wins || 0) + 1;
+    sv.level = S.level;
+    Store.set('save.spot', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'FOUND ALL',
+        title: '三处都找到了',
+        sub: '错点 ' + S.miss + ' 次 · 进入第 ' + S.level + ' 张',
+        stars: S.miss === 0 ? 3 : S.miss <= 2 ? 2 : 1,
+        buttons: [
+          { label: '下一张', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function newGame(){ generate(); build(); }
+
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.level = save().level || 1;
+  newGame();
+})();
+</script>
+</body>
+</html>

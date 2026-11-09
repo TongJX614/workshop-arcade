@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>跳跃 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,400px);aspect-ratio:3/4;
+    background:linear-gradient(180deg,#FDFAF3,#EDE4D2);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 40px rgba(31,28,22,.04);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXIV · Flap</div>
+      <h1>跳跃</h1>
+    </div>
+    <div class="bar__meta">过 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">点一下扇一次翅膀<br>从管缝里穿过去</div>
+    </div>
+    <div class="plinth">
+      <span>穿过 <b id="uiScore2">0</b> 组管子</span>
+      <span class="r" id="uiBest">最远 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiScore2 = document.getElementById('uiScore2');
+  const uiBest = document.getElementById('uiBest');
+
+  const W = 340, H = 452;
+  const BX = 92, BR = 12;
+  const GRAV = 880, FLAP = -268;
+  const PW = 52, GAP = 132, SPACING = 186, SPEED = 128;
+
+  const S = {
+    y: H / 2, vy: 0, rot: 0, pipes: [], score: 0,
+    running: false, done: false, last: 0, t: 0, clouds: []
+  };
+
+  function save(){ return Store.get('save.flappy', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  for(let i = 0; i < 5; i++) S.clouds.push({ x: Math.random() * W, y: 40 + Math.random() * 120, s: .6 + Math.random() * .9 });
+
+  function reset(){
+    S.y = H / 2; S.vy = 0; S.rot = 0; S.pipes = []; S.score = 0; S.t = 0; S.done = false;
+    for(let i = 0; i < 3; i++) addPipe(W + 120 + i * SPACING);
+    tip.classList.remove('hide');
+    uiScore.textContent = '0';
+    uiScore2.textContent = '0';
+  }
+
+  function addPipe(x){
+    const margin = 60;
+    const gapY = margin + Math.random() * (H - GAP - margin * 2 - 40) + 40;
+    S.pipes.push({ x, gy: gapY, passed: false });
+  }
+
+  function start(){
+    reset();
+    S.running = true;
+    tip.classList.add('hide');
+    S.vy = FLAP;
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function flap(){
+    if(!S.running) return;
+    S.vy = FLAP;
+    S.rot = -0.42;
+    Sound.tone(620, .05, 'triangle', .06);
+    haptic(5);
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.032, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+    S.t += dt;
+
+    S.vy += GRAV * dt;
+    S.y += S.vy * dt;
+    S.rot += (Math.min(1.25, Math.max(-0.5, S.vy / 500)) - S.rot) * Math.min(1, dt * 7);
+
+    // 管道
+    for(const p of S.pipes) p.x -= SPEED * dt;
+    if(S.pipes.length && S.pipes[0].x + PW < -20){
+      S.pipes.shift();
+      addPipe(S.pipes[S.pipes.length - 1].x + SPACING);
+    }
+    for(const p of S.pipes){
+      if(!p.passed && p.x + PW < BX - BR){
+        p.passed = true;
+        S.score++;
+        uiScore.textContent = S.score;
+        uiScore2.textContent = S.score;
+        Sound.pick(S.score);
+        haptic(6);
+        Shell.bump(uiScore);
+      }
+    }
+
+    // 碰撞
+    if(S.y + BR > H - 18 || S.y - BR < 0){ crash(); return; }
+    for(const p of S.pipes){
+      if(BX + BR > p.x && BX - BR < p.x + PW){
+        if(S.y - BR < p.gy || S.y + BR > p.gy + GAP){ crash(); return; }
+      }
+    }
+
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function crash(){
+    S.running = false;
+    S.done = true;
+    Sound.lose();
+    haptic([14, 50, 18]);
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.flappy', sv);
+    uiBest.textContent = '最远 ' + (sv.best || S.score) + ' 组';
+    setTimeout(() => {
+      plate({
+        kicker: 'CRASHED',
+        title: good && sv.plays > 1 ? '刷新最远' : '撞上去了',
+        sub: '穿过 ' + S.score + ' 组管子 · 最远 ' + (sv.best || S.score),
+        stars: S.score >= 24 ? 3 : S.score >= 14 ? 2 : S.score >= 6 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 480);
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+    const sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#FDFBF5');
+    sky.addColorStop(1, '#EAE0CC');
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    // 云
+    ctx.fillStyle = 'rgba(255,255,255,.75)';
+    for(const c of S.clouds){
+      c.x -= SPEED * 0.12 * 0.016;
+      if(c.x < -70){ c.x = W + 40; c.y = 40 + Math.random() * 140; }
+      const r = 14 * c.s;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+      ctx.arc(c.x + r, c.y + 3, r * .8, 0, Math.PI * 2);
+      ctx.arc(c.x - r, c.y + 4, r * .7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // 管道
+    for(const p of S.pipes){
+      // 上管
+      ctx.fillStyle = '#3F5B4A';
+      ctx.fillRect(p.x, 0, PW, p.gy);
+      ctx.fillStyle = 'rgba(255,255,255,.14)';
+      ctx.fillRect(p.x + 4, 0, 6, p.gy);
+      // 管口
+      ctx.fillStyle = '#2F4739';
+      ctx.fillRect(p.x - 4, p.gy - 20, PW + 8, 20);
+      ctx.fillRect(p.x - 4, p.gy - 20, PW + 8, 3);
+      // 下管
+      ctx.fillStyle = '#3F5B4A';
+      ctx.fillRect(p.x, p.gy + GAP, PW, H - p.gy - GAP);
+      ctx.fillStyle = 'rgba(255,255,255,.14)';
+      ctx.fillRect(p.x + 4, p.gy + GAP, 6, H - p.gy - GAP);
+      ctx.fillStyle = '#2F4739';
+      ctx.fillRect(p.x - 4, p.gy + GAP, PW + 8, 20);
+    }
+
+    // 地面
+    ctx.fillStyle = '#DFD4BC';
+    ctx.fillRect(0, H - 18, W, 18);
+    ctx.strokeStyle = 'rgba(31,28,22,.28)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H - 18); ctx.lineTo(W, H - 18); ctx.stroke();
+
+    // 鸟
+    ctx.save();
+    ctx.translate(BX, S.y);
+    ctx.rotate(S.rot);
+    // 翅膀
+    const wing = Math.sin(S.t * 16) * 4;
+    ctx.fillStyle = '#8A2F1E';
+    ctx.beginPath();
+    ctx.ellipse(-2, 2 + wing, 9, 5.5, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    // 身体
+    const g = ctx.createRadialGradient(-4, -4, 2, 0, 0, 14);
+    g.addColorStop(0, '#D97656');
+    g.addColorStop(1, '#A5351F');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, BR, 0, Math.PI * 2);
+    ctx.fill();
+    // 眼睛
+    ctx.fillStyle = '#FDF8F0';
+    ctx.beginPath(); ctx.arc(4, -5, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1F1C16';
+    ctx.beginPath(); ctx.arc(5, -5, 1.9, 0, Math.PI * 2); ctx.fill();
+    // 喙
+    ctx.fillStyle = '#D9A24A';
+    ctx.beginPath();
+    ctx.moveTo(10, 0); ctx.lineTo(19, 2.5); ctx.lineTo(10, 5);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  frame.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if(!S.running && !S.done) start(); else flap();
+  });
+  document.addEventListener('keydown', e => {
+    if(e.key === ' ' || e.key === 'ArrowUp'){
+      e.preventDefault();
+      if(!S.running && !S.done) start(); else flap();
+    }
+  });
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+  uiBest.textContent = save().best ? '最远 ' + save().best + ' 组' : '—';
+  draw();
+})();
+</script>
+</body>
+</html>

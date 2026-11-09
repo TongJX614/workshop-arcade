@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>三消 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .board{
+    position:relative;width:min(100%,420px);aspect-ratio:1/1;
+    background:rgba(31,28,22,.08);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 30px rgba(31,28,22,.06);
+    overflow:hidden;
+  }
+  .tile{
+    position:absolute;width:12.5%;height:12.5%;padding:3px;
+    transition:left .18s var(--ease),top .2s var(--ease),transform .18s var(--ease),opacity .2s;
+    will-change:left,top;
+  }
+  .chip{
+    width:100%;height:100%;border-radius:3px;display:grid;place-items:center;
+    font-size:clamp(13px,3.6vw,18px);color:rgba(255,255,255,.96);
+    text-shadow:0 1px 1px rgba(20,16,10,.30);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -2px 0 rgba(0,0,0,.16);
+    transition:box-shadow .18s,filter .18s;
+    font-family:var(--serif);
+  }
+  .t0 .chip{background:linear-gradient(160deg,#C26650,#98422E)}
+  .t1 .chip{background:linear-gradient(160deg,#4B463C,#221E18)}
+  .t2 .chip{background:linear-gradient(160deg,#CBAA6B,#9E7E3E)}
+  .t3 .chip{background:linear-gradient(160deg,#6389B4,#396190)}
+  .t4 .chip{background:linear-gradient(160deg,#6D8F78,#456A58)}
+  .t5 .chip{background:linear-gradient(160deg,#7E7191,#584C6C)}
+  .tile.sel .chip{box-shadow:0 0 0 2px var(--paper-hi),0 0 0 3px var(--ink),inset 0 1px 0 rgba(255,255,255,.3)}
+  .tile.gone{transform:scale(.2) rotate(12deg);opacity:0}
+  .tile.drop{animation:dropIn .26s var(--ease)}
+  @keyframes dropIn{from{transform:translateY(-18px);opacity:.4}to{transform:none;opacity:1}}
+  .hud{display:flex;align-items:baseline;gap:16px;font-family:var(--serif);font-size:10px;letter-spacing:.18em;color:var(--ink-3)}
+  .hud b{font-size:17px;color:var(--ink);letter-spacing:.02em;font-variant-numeric:tabular-nums;font-weight:400}
+  .hud .goal{color:var(--accent)}
+  .prog{width:min(100%,420px);height:2px;background:var(--line);position:relative;overflow:hidden}
+  .prog i{position:absolute;left:0;top:0;bottom:0;background:var(--accent);width:0;transition:width .34s var(--ease)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXIV · Match Three</div>
+      <h1>三消</h1>
+    </div>
+    <div class="bar__meta">步 <b id="uiMoves">30</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="hud"><span>得分 <b id="uiScore">0</b></span><span>目标 <b class="goal">1000</b></span></div>
+    <div class="prog"><i id="uiProg"></i></div>
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span>连成三块同色即可消除 · <span id="uiChain">连锁 ×1</span></span>
+      <span class="r" id="uiBest">最高 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新局
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const N = 8;
+  const SYM = ['●', '▲', '■', '◆', '✦', '✚'];
+  const GOAL = 1000;
+  const STEPS = 30;
+
+  const boardEl = document.getElementById('board');
+  const uiScore = document.getElementById('uiScore');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiProg = document.getElementById('uiProg');
+  const uiChain = document.getElementById('uiChain');
+  const uiBest = document.getElementById('uiBest');
+
+  const S = { g: [], sel: null, score: 0, moves: STEPS, busy: false, over: false };
+
+  function save(){ return Store.get('save.match3', {}) || {}; }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  function makeTile(t, r, c, fromTop){
+    const el = document.createElement('div');
+    el.className = 'tile t' + t;
+    el.dataset.r = r; el.dataset.c = c;
+    el.innerHTML = '<div class="chip">' + SYM[t] + '</div>';
+    el.style.left = (c * 12.5) + '%';
+    el.style.top = ((fromTop ? r - N : r) * 12.5) + '%';
+    boardEl.appendChild(el);
+    if(fromTop){
+      requestAnimationFrame(() => { el.style.top = (r * 12.5) + '%'; });
+    }
+    return { t, el };
+  }
+
+  function place(tile, r, c){
+    tile.el.dataset.r = r;
+    tile.el.dataset.c = c;
+    tile.el.style.left = (c * 12.5) + '%';
+    tile.el.style.top = (r * 12.5) + '%';
+  }
+
+  function build(){
+    boardEl.innerHTML = '';
+    S.g = [];
+    for(let r = 0; r < N; r++) S.g.push(new Array(N).fill(null));
+    for(let r = 0; r < N; r++) for(let c = 0; c < N; c++){
+      let t, guard = 0;
+      do{ t = Shell.rand(SYM.length); guard++; }
+      while(guard < 40 && ((c >= 2 && S.g[r][c-1] && S.g[r][c-2] && S.g[r][c-1].t === t && S.g[r][c-2].t === t) ||
+                            (r >= 2 && S.g[r-1][c] && S.g[r-2][c] && S.g[r-1][c].t === t && S.g[r-2][c].t === t)));
+      S.g[r][c] = makeTile(t, r, c, false);
+      S.g[r][c].el.style.animation = 'dropIn .3s ease backwards';
+      S.g[r][c].el.style.animationDelay = ((r + c) * 12) + 'ms';
+    }
+    S.sel = null; S.score = 0; S.moves = STEPS; S.busy = false; S.over = false;
+    paintHud();
+  }
+
+  function findMatches(){
+    const out = new Set();
+    // 横
+    for(let r = 0; r < N; r++){
+      let run = 1;
+      for(let c = 1; c <= N; c++){
+        const same = c < N && S.g[r][c] && S.g[r][c-1] && S.g[r][c].t === S.g[r][c-1].t;
+        if(same) run++;
+        else{
+          if(run >= 3) for(let k = c - run; k < c; k++) out.add(r * N + k);
+          run = 1;
+        }
+      }
+    }
+    // 竖
+    for(let c = 0; c < N; c++){
+      let run = 1;
+      for(let r = 1; r <= N; r++){
+        const same = r < N && S.g[r][c] && S.g[r-1][c] && S.g[r][c].t === S.g[r-1][c].t;
+        if(same) run++;
+        else{
+          if(run >= 3) for(let k = r - run; k < r; k++) out.add(k * N + c);
+          run = 1;
+        }
+      }
+    }
+    return out;
+  }
+
+  function collapse(){
+    for(let c = 0; c < N; c++){
+      let write = N - 1;
+      for(let r = N - 1; r >= 0; r--){
+        if(S.g[r][c]){
+          if(write !== r){
+            S.g[write][c] = S.g[r][c];
+            S.g[r][c] = null;
+            place(S.g[write][c], write, c);
+          }
+          write--;
+        }
+      }
+      for(let r = write; r >= 0; r--){
+        S.g[r][c] = makeTile(Shell.rand(SYM.length), r, c, true);
+      }
+    }
+  }
+
+  async function resolve(){
+    S.busy = true;
+    let chain = 0;
+    while(true){
+      const m = findMatches();
+      if(!m.size) break;
+      chain++;
+      uiChain.textContent = '连锁 ×' + chain;
+      const gain = m.size * 10 * chain;
+      S.score += gain;
+      m.forEach(k => {
+        const r = (k / N) | 0, c = k % N;
+        const tile = S.g[r][c];
+        if(!tile) return;
+        tile.el.classList.add('gone');
+        const el = tile.el;
+        setTimeout(() => { if(el.parentNode) el.parentNode.removeChild(el); }, 260);
+        S.g[r][c] = null;
+      });
+      Sound.drop(chain + 1);
+      haptic(chain > 1 ? [8, 20, 8] : 7);
+      paintHud();
+      await sleep(250);
+      collapse();
+      await sleep(300);
+    }
+    S.busy = false;
+    uiChain.textContent = '连锁 ×1';
+    if(!S.over && S.moves <= 0) end();
+  }
+
+  function paintHud(){
+    uiScore.textContent = S.score;
+    uiMoves.textContent = S.moves;
+    uiProg.style.width = Math.min(100, S.score / GOAL * 100) + '%';
+    const sv = save();
+    uiBest.textContent = sv.best ? '最高 ' + sv.best : '—';
+  }
+
+  function tap(r, c){
+    if(S.busy || S.over) return;
+    if(!S.sel){
+      S.sel = [r, c];
+      S.g[r][c].el.classList.add('sel');
+      Sound.tone(470, .04, 'sine', .05);
+      return;
+    }
+    const [pr, pc] = S.sel;
+    if(pr === r && pc === c){
+      S.g[r][c].el.classList.remove('sel');
+      S.sel = null;
+      return;
+    }
+    if(Math.abs(pr - r) + Math.abs(pc - c) !== 1){
+      S.g[pr][pc].el.classList.remove('sel');
+      S.sel = [r, c];
+      S.g[r][c].el.classList.add('sel');
+      return;
+    }
+    const a = S.g[pr][pc], b = S.g[r][c];
+    S.g[pr][pc].el.classList.remove('sel');
+    S.sel = null;
+    if(!a || !b) return;
+    // 试交换
+    S.g[pr][pc] = b; S.g[r][c] = a;
+    place(a, r, c); place(b, pr, pc);
+    S.busy = true;
+    setTimeout(async () => {
+      if(findMatches().size === 0){
+        // 换回来
+        S.g[pr][pc] = a; S.g[r][c] = b;
+        place(a, pr, pc); place(b, r, c);
+        Sound.bad();
+        haptic(6);
+        await sleep(220);
+        S.busy = false;
+        return;
+      }
+      S.moves--;
+      S.busy = false;
+      paintHud();
+      await resolve();
+      if(S.score >= GOAL && !S.over) end(true);
+    }, 200);
+  }
+
+  function end(won){
+    S.over = true;
+    const sv = save();
+    if(S.score > (sv.best || 0)) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    if(S.score >= GOAL) sv.wins = (sv.wins || 0) + 1;
+    Store.set('save.match3', sv);
+    if(won) { Sound.win(); haptic([10, 30, 12]); }
+    else Sound.lose();
+    setTimeout(() => {
+      plate({
+        kicker: won ? 'GOAL REACHED' : 'OUT OF MOVES',
+        title: won ? '达标了' : '步数用完',
+        sub: '得分 ' + S.score + ' · 目标 ' + GOAL,
+        stars: S.score >= GOAL * 2 ? 3 : S.score >= GOAL * 1.4 ? 2 : won ? 1 : 0,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function newGame(){
+    build();
+    if(findMatches().size) return newGame();
+  }
+
+  boardEl.addEventListener('click', e => {
+    const t = e.target.closest('.tile');
+    if(!t) return;
+    const r = +t.dataset.r, c = +t.dataset.c;
+    tap(r, c);
+  });
+
+  document.getElementById('btnNew').addEventListener('click', () => { Sound.tone(660, .06, 'sine', .09); newGame(); });
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  newGame();
+})();
+</script>
+</body>
+</html>

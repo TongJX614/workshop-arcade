@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>切水果 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:12px}
+  .frame{
+    position:relative;width:min(100%,400px);aspect-ratio:3/4;
+    background:radial-gradient(120% 90% at 50% 0%,#FDFAF3,#E9DFCB);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep),inset 0 0 50px rgba(31,28,22,.05);
+    overflow:hidden;touch-action:none;
+  }
+  canvas{display:block;width:100%;height:100%}
+  .tip{
+    position:absolute;inset:0;display:grid;place-items:center;pointer-events:none;
+    font-family:var(--serif);font-size:12px;letter-spacing:.14em;color:rgba(31,28,22,.56);
+    text-align:center;line-height:2;
+  }
+  .tip.hide{display:none}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XL · Slice</div>
+      <h1>切水果</h1>
+    </div>
+    <div class="bar__meta">分 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="cv"></canvas>
+      <div class="tip" id="tip">划过去切开<br>别碰黑色的炸弹</div>
+    </div>
+    <div class="plinth">
+      <span>切中 <b id="uiHit">0</b> · 连切 <b id="uiCombo">0</b></span>
+      <span class="r" id="uiTime">60 秒</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const cv = document.getElementById('cv');
+  const frame = document.getElementById('frame');
+  const tip = document.getElementById('tip');
+  const uiScore = document.getElementById('uiScore');
+  const uiHit = document.getElementById('uiHit');
+  const uiCombo = document.getElementById('uiCombo');
+  const uiTime = document.getElementById('uiTime');
+
+  const W = 340, H = 452;
+  const GRAV = 860;
+
+  const FRUIT = [
+    { c: '#C9553D', c2: '#8E2E1C' },
+    { c: '#D3AC62', c2: '#9A7433' },
+    { c: '#5F8A6E', c2: '#3C6350' },
+    { c: '#7A6A92', c2: '#4E4266' },
+    { c: '#4E7FB8', c2: '#2F5C90' }
+  ];
+
+  const S = {
+    items: [], slices: [], trail: [],
+    score: 0, hit: 0, combo: 0, time: 60,
+    running: false, done: false, last: 0, spawn: 0, drawing: false
+  };
+
+  function save(){ return Store.get('save.slice', {}) || {}; }
+
+  const dpr = Shell.dpr();
+  cv.width = W * dpr; cv.height = H * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  function hud(){
+    uiScore.textContent = S.score;
+    uiHit.textContent = S.hit;
+    uiCombo.textContent = S.combo;
+    uiTime.textContent = Math.ceil(S.time) + ' 秒';
+  }
+
+  function reset(){
+    S.items = []; S.slices = []; S.trail = [];
+    S.score = 0; S.hit = 0; S.combo = 0; S.time = 60; S.spawn = 0.4;
+    S.done = false;
+    tip.classList.remove('hide');
+    hud();
+  }
+
+  function start(){
+    reset();
+    S.running = true;
+    tip.classList.add('hide');
+    S.last = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function throwOne(){
+    const bomb = Math.random() < Math.min(0.24, 0.06 + (60 - S.time) * 0.004);
+    const dir = Math.random() < .5 ? -1 : 1;
+    const x = W / 2 + dir * (60 + Math.random() * 60);
+    S.items.push({
+      x,
+      y: H + 26,
+      vx: -dir * (40 + Math.random() * 90),
+      vy: -(560 + Math.random() * 130),
+      r: bomb ? 17 : 15 + Math.random() * 5,
+      bomb,
+      kind: Shell.rand(FRUIT.length),
+      rot: Math.random() * 6,
+      vr: (Math.random() - .5) * 6,
+      life: 0
+    });
+  }
+
+  function segDist(ax, ay, bx, by, px, py){
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1;
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = Math.max(0, Math.min(1, t));
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  function sliceAt(x1, y1, x2, y2){
+    let cut = 0;
+    for(const it of S.items){
+      if(it.dead) continue;
+      if(segDist(x1, y1, x2, y2, it.x, it.y) < it.r + 6){
+        if(it.bomb){ boom(); return; }
+        it.dead = true;
+        cut++;
+        S.hit++;
+        S.score += 1 + Math.floor(S.combo / 2);
+        S.slices.push({ x: it.x, y: it.y, r: it.r, kind: it.kind, t: 0, ang: Math.atan2(y2 - y1, x2 - x1) });
+        Sound.tone(500 + it.kind * 60, .06, 'triangle', .07);
+      }
+    }
+    if(cut){
+      S.combo += cut;
+      haptic(cut > 1 ? [8, 18, 8] : 6);
+      if(cut > 1) Shell.floatNum(frame, '×' + cut, '');
+      hud();
+    }
+  }
+
+  function boom(){
+    S.running = false;
+    S.done = true;
+    Sound.lose();
+    haptic([16, 60, 22]);
+    S.items = [];
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.slice', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'BOOM',
+        title: '切到炸弹了',
+        sub: S.score + ' 分 · 切中 ' + S.hit + ' 个',
+        stars: 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function over(){
+    S.running = false;
+    S.done = true;
+    Sound.done();
+    const sv = save();
+    const good = S.score > (sv.best || 0);
+    if(good) sv.best = S.score;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.slice', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'TIME UP',
+        title: good ? '刷新最高' : '时间到',
+        sub: S.score + ' 分 · 切中 ' + S.hit + ' 个',
+        stars: S.score >= 60 ? 3 : S.score >= 35 ? 2 : S.score >= 16 ? 1 : 0,
+        buttons: [
+          { label: '再来一次', kind: 'ink', onClick: start },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 460);
+  }
+
+  function loop(now){
+    if(!S.running) return;
+    const dt = Math.min(0.032, (now - S.last) / 1000 || 0.016);
+    S.last = now;
+    S.time -= dt;
+    if(S.time <= 0){ S.time = 0; hud(); over(); return; }
+
+    // 抛出
+    S.spawn -= dt;
+    if(S.spawn <= 0){
+      throwOne();
+      if(Math.random() < Math.min(.55, .18 + (60 - S.time) * .008)) throwOne();
+      S.spawn = Math.max(0.34, 0.95 - (60 - S.time) * 0.008);
+    }
+
+    for(const it of S.items){
+      it.vy += GRAV * dt;
+      it.x += it.vx * dt;
+      it.y += it.vy * dt;
+      it.rot += it.vr * dt;
+      it.life += dt;
+      if(it.y > H + 60) it.dead = true;
+    }
+    S.items = S.items.filter(i => !i.dead);
+
+    for(const s of S.slices) s.t += dt;
+    S.slices = S.slices.filter(s => s.t < 0.55);
+
+    // 没切到的水果落地：连击断掉
+    for(const it of S.items){
+      if(it.y > H - 10 && it.vy > 0 && !it.bomb){ /* 就是掉下去，不扣分 */ }
+    }
+
+    // 刀光衰减
+    if(!S.drawing && S.trail.length){
+      S.trail.shift();
+      if(S.trail.length > 1) S.trail.shift();
+    }
+
+    hud();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function drawFruit(it){
+    ctx.save();
+    ctx.translate(it.x, it.y);
+    ctx.rotate(it.rot);
+    if(it.bomb){
+      ctx.fillStyle = '#2A241C';
+      ctx.beginPath(); ctx.arc(0, 0, it.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(180,64,44,.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -it.r); ctx.quadraticCurveTo(7, -it.r - 12, 2, -it.r - 17); ctx.stroke();
+      ctx.fillStyle = '#B4402C';
+      ctx.beginPath(); ctx.arc(2, -it.r - 19, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.18)';
+      ctx.beginPath(); ctx.arc(-it.r * .3, -it.r * .35, it.r * .26, 0, Math.PI * 2); ctx.fill();
+    }else{
+      const f = FRUIT[it.kind];
+      const g = ctx.createRadialGradient(-it.r * .3, -it.r * .35, it.r * .12, 0, 0, it.r);
+      g.addColorStop(0, f.c);
+      g.addColorStop(1, f.c2);
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, it.r, 0, Math.PI * 2); ctx.fill();
+      // 高光
+      ctx.fillStyle = 'rgba(255,255,255,.34)';
+      ctx.beginPath(); ctx.ellipse(-it.r * .34, -it.r * .38, it.r * .22, it.r * .14, -0.6, 0, Math.PI * 2); ctx.fill();
+      // 叶子
+      ctx.strokeStyle = '#4E6A48';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -it.r); ctx.lineTo(2, -it.r - 6); ctx.stroke();
+      ctx.fillStyle = '#5F8A6E';
+      ctx.beginPath(); ctx.ellipse(6, -it.r - 7, 5, 2.4, -0.5, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function draw(){
+    ctx.clearRect(0, 0, W, H);
+
+    // 纸底细纹
+    ctx.strokeStyle = 'rgba(31,28,22,.035)';
+    ctx.lineWidth = 1;
+    for(let y = 20; y < H; y += 42){
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    for(const it of S.items) drawFruit(it);
+
+    // 切开的两半
+    for(const s of S.slices){
+      const p = s.t / 0.55;
+      const off = 6 + p * 26;
+      const f = FRUIT[s.kind];
+      [-1, 1].forEach(sign => {
+        ctx.save();
+        ctx.globalAlpha = 1 - p;
+        ctx.translate(s.x, s.y);
+        ctx.rotate(s.ang + Math.PI / 2 * sign * 0);
+        ctx.translate(0, sign * off);
+        ctx.fillStyle = f.c;
+        ctx.beginPath();
+        ctx.arc(0, 0, s.r, sign > 0 ? 0 : Math.PI, sign > 0 ? Math.PI : Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.55)';
+        ctx.beginPath();
+        ctx.arc(0, 0, s.r * .72, sign > 0 ? 0 : Math.PI, sign > 0 ? Math.PI : Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    // 刀光
+    if(S.trail.length > 1){
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      for(let pass = 0; pass < 2; pass++){
+        ctx.strokeStyle = pass === 0 ? 'rgba(255,255,255,.7)' : 'rgba(180,64,44,.55)';
+        ctx.lineWidth = pass === 0 ? 7 : 2.5;
+        ctx.beginPath();
+        ctx.moveTo(S.trail[0].x, S.trail[0].y);
+        for(let i = 1; i < S.trail.length; i++) ctx.lineTo(S.trail[i].x, S.trail[i].y);
+        ctx.stroke();
+      }
+    }
+  }
+
+  /* 划动 */
+  function pos(e){
+    const r = frame.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+  }
+  frame.addEventListener('pointerdown', e => {
+    if(!S.running) return;
+    S.drawing = true;
+    const p = pos(e);
+    S.trail = [p];
+    S.lastPt = p;
+  });
+  frame.addEventListener('pointermove', e => {
+    if(!S.running || !S.drawing) return;
+    const p = pos(e);
+    S.trail.push(p);
+    if(S.trail.length > 10) S.trail.shift();
+    sliceAt(S.lastPt.x, S.lastPt.y, p.x, p.y);
+    S.lastPt = p;
+  });
+  frame.addEventListener('pointerup', () => { S.drawing = false; });
+  frame.addEventListener('pointercancel', () => { S.drawing = false; });
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  reset();
+  draw();
+})();
+</script>
+</body>
+</html>

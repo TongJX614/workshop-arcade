@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>拼图 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:12px}
+  .board{
+    width:min(100%,400px);aspect-ratio:1/1;position:relative;
+    display:grid;gap:2px;padding:2px;
+    background:var(--line-2);border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);
+  }
+  .piece{
+    appearance:none;border:0;padding:0;cursor:pointer;position:relative;
+    background-repeat:no-repeat;background-color:#F2EEE4;
+    transition:transform .16s var(--ease),box-shadow .16s,filter .16s,opacity .2s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .piece:hover{filter:brightness(1.06)}
+  .piece.sel{
+    z-index:3;transform:scale(.94);
+    box-shadow:0 0 0 2px var(--accent),0 8px 18px -10px rgba(31,28,22,.9);
+  }
+  .piece.pop{animation:pop .22s var(--ease)}
+  @keyframes pop{from{transform:scale(.9)}to{transform:none}}
+  .piece.lock::after{
+    content:"";position:absolute;right:3px;bottom:3px;width:5px;height:5px;
+    background:var(--accent);border-radius:50%;opacity:.8;
+  }
+  .ref{
+    width:56px;height:56px;flex:0 0 auto;border:1px solid var(--line-2);
+    background-size:cover;box-shadow:var(--sh-lift);
+  }
+  .plinth{gap:10px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXIII · Jigsaw</div>
+      <h1>拼图</h1>
+    </div>
+    <div class="bar__meta">步 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="plinth">
+      <span>已归位 <b id="uiPlaced">0</b> / <span id="uiTotal">9</span></span>
+      <div class="ref" id="ref"></div>
+    </div>
+    <div class="hint" style="font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2)">点两块互换，把画拼回去</div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-n="3">3 × 3</button>
+      <button data-n="4">4 × 4</button>
+      <button data-n="5">5 × 5</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新图
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const boardEl = document.getElementById('board');
+  const refEl = document.getElementById('ref');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiPlaced = document.getElementById('uiPlaced');
+  const uiTotal = document.getElementById('uiTotal');
+  const segSize = document.getElementById('segSize');
+
+  const S = { n: 4, order: [], sel: -1, moves: 0, done: false, url: '', els: [] };
+
+  function save(){ return Store.get('save.puzzle', {}) || {}; }
+
+  /* 用几何图形现场画一张「构成主义」海报，不需要外部图片 */
+  function makeArt(seed){
+    const r = mulberry(seed);
+    const pick = a => a[Math.floor(r() * a.length)];
+    const RED = '#B4402C', INK = '#1F1C16', GOLD = '#9C7F37', BLUE = '#2F6AB5', PAPER = '#F2EEE4';
+    let body = '<rect width="320" height="320" fill="' + PAPER + '"/>';
+    // 大色块
+    const kind = Math.floor(r() * 4);
+    if(kind === 0) body += '<circle cx="' + (90 + r() * 140) + '" cy="' + (80 + r() * 120) + '" r="' + (58 + r() * 40) + '" fill="' + RED + '"/>';
+    if(kind === 1) body += '<rect x="' + (20 + r() * 40) + '" y="' + (20 + r() * 40) + '" width="' + (90 + r() * 70) + '" height="' + (130 + r() * 80) + '" fill="' + INK + '"/>';
+    if(kind === 2) body += '<path d="M0 320 L' + (120 + r() * 120) + ' 60 L320 320 Z" fill="' + GOLD + '"/>';
+    if(kind === 3) body += '<circle cx="230" cy="90" r="70" fill="' + BLUE + '" opacity=".85"/>';
+    // 第二条形状
+    const kind2 = Math.floor(r() * 3);
+    if(kind2 === 0) body += '<circle cx="' + (150 + r() * 100) + '" cy="' + (160 + r() * 90) + '" r="' + (34 + r() * 30) + '" fill="' + pick([RED, INK, GOLD]) + '"/>';
+    if(kind2 === 1) body += '<rect x="' + (120 + r() * 80) + '" y="' + (120 + r() * 80) + '" width="' + (60 + r() * 60) + '" height="' + (24 + r() * 24) + '" fill="' + pick([RED, INK]) + '" transform="rotate(' + Math.floor(r() * 90) + ' 160 160)"/>';
+    if(kind2 === 2) body += '<path d="M0 ' + (180 + r() * 80) + ' H320" stroke="' + INK + '" stroke-width="3"/>';
+    // 细线与点
+    const y1 = Math.floor(r() * 320);
+    body += '<path d="M0 ' + y1 + ' H320" stroke="' + INK + '" stroke-width="1" opacity=".5"/>';
+    body += '<circle cx="' + Math.floor(r() * 320) + '" cy="' + Math.floor(r() * 320) + '" r="3" fill="' + INK + '"/>';
+    body += '<rect x="14" y="286" width="42" height="20" fill="none" stroke="' + INK + '" stroke-width="1"/>';
+    return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320">' + body + '</svg>';
+  }
+  /* 一个固定种子的伪随机，保证同一局图形不变 */
+  function mulberry(a){
+    return function(){
+      a |= 0; a = a + 0x6D2B79F5 | 0;
+      let t = Math.imul(a ^ a >>> 15, 1 | a);
+      t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function setBg(el, idx){
+    const n = S.n;
+    const r = (idx / n) | 0, c = idx % n;
+    el.style.backgroundImage = 'url("' + S.url + '")';
+    el.style.backgroundSize = (n * 100) + '% ' + (n * 100) + '%';
+    el.style.backgroundPosition = (n === 1 ? 0 : (c / (n - 1)) * 100) + '% ' + (n === 1 ? 0 : (r / (n - 1)) * 100) + '%';
+  }
+
+  function build(scramble){
+    const n = S.n;
+    boardEl.style.gridTemplateColumns = 'repeat(' + n + ',1fr)';
+    boardEl.style.gridTemplateRows = 'repeat(' + n + ',1fr)';
+    boardEl.innerHTML = '';
+    S.els = [];
+    for(let i = 0; i < n * n; i++){
+      const b = document.createElement('button');
+      b.className = 'piece';
+      b.dataset.i = i;
+      b.addEventListener('click', () => pick(i));
+      boardEl.appendChild(b);
+      S.els.push(b);
+    }
+    if(scramble){
+      S.order = [];
+      for(let i = 0; i < n * n; i++) S.order.push(i);
+      // 随机交换若干次，保证不是原样
+      let guard = 0;
+      do{
+        for(let t = 0; t < n * n * 3; t++){
+          const a = Shell.rand(n * n), b = Shell.rand(n * n);
+          const tmp = S.order[a]; S.order[a] = S.order[b]; S.order[b] = tmp;
+        }
+        guard++;
+      }while(guard < 20 && S.order.every((v, i) => v === i));
+      S.moves = 0;
+      S.sel = -1;
+      S.done = false;
+    }
+    paint();
+  }
+
+  function paint(){
+    let placed = 0;
+    S.els.forEach((el, i) => {
+      const idx = S.order[i];
+      setBg(el, idx);
+      el.className = 'piece' + (S.sel === i ? ' sel' : '') + (idx === i ? ' lock' : '');
+      if(idx === i) placed++;
+    });
+    uiMoves.textContent = S.moves;
+    uiPlaced.textContent = placed;
+    uiTotal.textContent = S.n * S.n;
+  }
+
+  function pick(i){
+    if(S.done) return;
+    if(S.sel < 0){
+      S.sel = i;
+      Sound.tone(480, .04, 'sine', .06);
+      haptic(5);
+      paint();
+      return;
+    }
+    if(S.sel === i){
+      S.sel = -1; Sound.tone(320, .04, 'sine', .04); paint(); return;
+    }
+    const a = S.sel, b = i;
+    const tmp = S.order[a]; S.order[a] = S.order[b]; S.order[b] = tmp;
+    S.sel = -1;
+    S.moves++;
+    Sound.drop(S.moves % 5);
+    haptic(9);
+    paint();
+    // 先抓住元素引用：切尺寸会重建 S.els，延时回调里不能再按下标取
+    const ea = S.els[a], eb = S.els[b];
+    if(ea) ea.classList.add('pop');
+    if(eb) eb.classList.add('pop');
+    setTimeout(() => {
+      if(ea) ea.classList.remove('pop');
+      if(eb) eb.classList.remove('pop');
+    }, 240);
+    if(S.order.every((v, k) => v === k)) win();
+  }
+
+  function win(){
+    S.done = true;
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(boardEl, 480);
+    const sv = save();
+    const key = 'best' + S.n;
+    const good = !sv[key] || S.moves < sv[key];
+    if(good) sv[key] = S.moves;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.puzzle', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'ASSEMBLED',
+        title: '拼回原样',
+        sub: S.n + ' × ' + S.n + ' · ' + S.moves + ' 次交换',
+        stars: S.moves <= S.n * S.n * 1.2 ? 3 : S.moves <= S.n * S.n * 2 ? 2 : 1,
+        buttons: [
+          { label: '新图', kind: 'ink', onClick: () => newGame(true) },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 500);
+  }
+
+  function newGame(newArt){
+    if(newArt || !S.url){
+      S.url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(makeArt(Math.floor(Math.random() * 1e9)));
+      refEl.style.backgroundImage = 'url("' + S.url + '")';
+    }
+    build(true);
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.puzzle', sv);
+      newGame(false);
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', () => newGame(true));
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = [3, 4, 5].indexOf(save().n) >= 0 ? save().n : 4;
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame(true);
+})();
+</script>
+</body>
+</html>

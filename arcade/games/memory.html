@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>记忆翻牌 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;}
+  /* 牌摊在桌面上：一张一张有厚度地分开 */
+  .grid{
+    display:grid;gap:clamp(5px,1.5vw,9px);width:100%;max-width:520px;
+    padding:0;
+  }
+  .card{
+    position:relative;aspect-ratio:1/1;
+    background:transparent;border:0;padding:0;cursor:pointer;
+    perspective:800px;appearance:none;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .card__inner{
+    position:absolute;inset:0;
+    transform-style:preserve-3d;
+    transition:transform .44s cubic-bezier(.3,1.25,.42,1);
+    border-radius:1px;
+    box-shadow:0 1px 0 rgba(255,255,255,.7), 0 7px 12px -9px rgba(31,28,22,.6);
+    will-change:transform;
+  }
+  .card.flip .card__inner{transform:rotateY(180deg)}
+  .card:active .card__inner{transform:scale(.97)}
+  .card.flip:active .card__inner{transform:rotateY(180deg) scale(.97)}
+  .face{
+    position:absolute;inset:0;
+    display:grid;place-items:center;
+    backface-visibility:hidden;-webkit-backface-visibility:hidden;
+    border-radius:1px;overflow:hidden;
+  }
+  /* 背面：两向压纹 + 中央一枚菱形印记 */
+  .face--back{
+    background:
+      repeating-linear-gradient(45deg,rgba(31,28,22,.085) 0 1px,transparent 1px 6px),
+      repeating-linear-gradient(-45deg,rgba(31,28,22,.045) 0 1px,transparent 1px 6px),
+      linear-gradient(180deg,#F9F4E8 0%,#EFE7D6 100%);
+    border:1px solid rgba(31,28,22,.24);
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.75), inset 0 0 0 4px rgba(251,248,241,.55);
+  }
+  .face--back::after{
+    content:"";width:24%;aspect-ratio:1;border:1px solid rgba(180,64,44,.38);
+    transform:rotate(45deg);
+    box-shadow:inset 0 0 0 3px rgba(180,64,44,.10);
+  }
+  .face--front{
+    transform:rotateY(180deg);
+    background:linear-gradient(180deg,#FFFDF7 0%,#F6F0E2 100%);
+    border:1px solid rgba(31,28,22,.18);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
+  }
+  .face--front svg{width:54%;height:54%;fill:none;stroke:var(--ink);stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+  /* 配对成功：盖一枚朱红章框 */
+  .card.done{cursor:default}
+  .card.done .face--front{
+    border-color:rgba(180,64,44,.42);
+    background:linear-gradient(180deg,#FFFCF4 0%,#FBF1E3 100%);
+    box-shadow:inset 0 0 0 3px rgba(180,64,44,.06);
+  }
+  .card.done .face--front::after{
+    content:"";position:absolute;inset:5px;border:1px solid rgba(180,64,44,.22);border-radius:1px;
+  }
+  .card.done .face--front svg{stroke:var(--accent)}
+  .card.done{animation:sealPop .44s var(--ease)}
+  @keyframes sealPop{
+    0%{transform:scale(1)}
+    40%{transform:scale(.93)}
+    70%{transform:scale(1.02)}
+    100%{transform:scale(1)}
+  }
+  /* 配错：整张牌左右一晃 */
+  .card.bad{animation:bad .38s ease-out}
+  @keyframes bad{
+    0%,100%{transform:translateX(0)}
+    18%{transform:translateX(-3px)}
+    42%{transform:translateX(3px)}
+    66%{transform:translateX(-2px)}
+    84%{transform:translateX(1px)}
+  }
+  .card.bad .face--front{border-color:rgba(180,64,44,.34)}
+  .plinth b{color:var(--accent)}
+  @keyframes cardIn{from{opacity:0;transform:translateY(8px) scale(.96)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">III · Memory</div>
+      <h1>记忆翻牌</h1>
+    </div>
+    <div class="bar__meta">手数 <b id="uiMoves">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="grid" id="grid"></div>
+    <div class="plinth">
+      <span id="uiMeta">已配对 <b>0</b> / 8</span>
+      <span class="r" id="uiTime">0:00</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segPairs">
+      <button data-p="6">6 对</button>
+      <button data-p="8">8 对</button>
+      <button data-p="10">10 对</button>
+      <button data-p="12">12 对</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnRestart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      重开
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音" aria-label="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, fmtTime, haptic } = Shell;
+
+  const SYMBOLS = [
+    '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="2.4"/>',
+    '<path d="M12 4.5 20 19H4Z"/><path d="M12 10.5 15.4 16H8.6Z"/>',
+    '<rect x="5" y="5" width="14" height="14"/><path d="M9 9h6v6H9z"/>',
+    '<path d="M12 3 21 12l-9 9-9-9Z"/><path d="M12 8l4 4-4 4-4-4Z"/>',
+    '<path d="M12 4v16M4 12h16"/><circle cx="12" cy="12" r="4.4"/>',
+    '<path d="M12 3.6 14.2 9.2 20 9.6 15.6 13.3 16.9 19 12 15.9 7.1 19 8.4 13.3 4 9.6 9.8 9.2Z"/>',
+    '<path d="M12 3.5 19.4 7.7v8.6L12 20.5 4.6 16.3V7.7Z"/><path d="M12 3.5v17M4.6 7.7 19.4 16.3M19.4 7.7 4.6 16.3"/>',
+    '<path d="M4 15c2.6-6 5.4-6 8 0s5.4 6 8 0"/>',
+    '<circle cx="8.5" cy="8.5" r="2.2"/><circle cx="15.5" cy="8.5" r="2.2"/><circle cx="8.5" cy="15.5" r="2.2"/><circle cx="15.5" cy="15.5" r="2.2"/>',
+    '<path d="M4.5 18.5C4.5 11 11 4.5 18.5 4.5"/><path d="M4.5 18.5h6M4.5 18.5v-6"/>',
+    '<path d="M5 12a7 7 0 0 1 14 0"/><path d="M5 12h14"/><path d="M8 16h8"/>',
+    '<path d="M12 4 20 12l-8 8-8-8Z"/><circle cx="12" cy="12" r="2"/>'
+  ];
+
+  const gridEl = document.getElementById('grid');
+  const uiMoves = document.getElementById('uiMoves');
+  const uiMeta = document.getElementById('uiMeta');
+  const uiTime = document.getElementById('uiTime');
+  const segPairs = document.getElementById('segPairs');
+  const btnSound = document.getElementById('btnSound');
+
+  const S = { pairs: 8, deck: [], open: [], matched: 0, moves: 0, elapsed: 0, tick: 0, lock: false, started: false };
+
+  function save(){ return Store.get('save.memory', {}) || {}; }
+
+  function startTimer(){
+    clearInterval(S.tick);
+    S.tick = setInterval(() => {
+      if(document.hidden) return;
+      S.elapsed++; uiTime.textContent = fmtTime(S.elapsed);
+    }, 1000);
+  }
+  function stopTimer(){ clearInterval(S.tick); S.tick = 0; }
+
+  function build(){
+    const colMap = { 6: 4, 8: 4, 10: 5, 12: 6 };
+    const cols = colMap[S.pairs] || 4;
+    gridEl.style.gridTemplateColumns = 'repeat(' + cols + ', 1fr)';
+
+    const picks = Shell.shuffle(SYMBOLS.map((s, i) => i)).slice(0, S.pairs);
+    let deck = [];
+    picks.forEach((id, i) => { deck.push({ id: id, key: i * 2 }, { id: id, key: i * 2 + 1 }); });
+    S.deck = Shell.shuffle(deck).map((c, i) => Object.assign(c, { idx: i }));
+
+    gridEl.innerHTML = '';
+    S.deck.forEach((c, i) => {
+      const b = document.createElement('button');
+      b.className = 'card';
+      b.dataset.idx = i;
+      b.innerHTML =
+        '<div class="card__inner">' +
+          '<div class="face face--back"></div>' +
+          '<div class="face face--front"><svg viewBox="0 0 24 24">' + SYMBOLS[c.id] + '</svg></div>' +
+        '</div>';
+      b.addEventListener('click', () => flip(i));
+      // 发牌：一张一张落下，动画结束后把内联样式清掉，免得压住后面的盖章动画
+      b.style.animation = 'cardIn .42s cubic-bezier(.22,1,.36,1) backwards';
+      b.style.animationDelay = (i * 18) + 'ms';
+      setTimeout(() => { b.style.animation = ''; b.style.animationDelay = ''; }, i * 18 + 470);
+      gridEl.appendChild(b);
+    });
+  }
+
+  function flip(i){
+    if(S.lock) return;
+    const card = gridEl.children[i];
+    if(!card || card.classList.contains('flip') || card.classList.contains('done')) return;
+
+    if(!S.started){ S.started = true; startTimer(); }
+
+    card.classList.add('flip');
+    Sound.tone(420 + (i % 5) * 45, .07, 'triangle', .07);
+    haptic(8);
+    S.open.push(i);
+
+    if(S.open.length === 2){
+      S.moves++;
+      uiMoves.textContent = S.moves;
+      Shell.bump(uiMoves);
+      const [a, b] = S.open;
+      const same = S.deck[a].id === S.deck[b].id;
+      if(same){
+        setTimeout(() => {
+          gridEl.children[a].classList.add('done');
+          gridEl.children[b].classList.add('done');
+          S.matched++;
+          updateMeta();
+          Sound.done();
+          S.open = [];
+          if(S.matched === S.pairs) win();
+        }, 180);
+      }else{
+        S.lock = true;
+        const ca = gridEl.children[a], cb = gridEl.children[b];
+        ca.classList.add('bad'); cb.classList.add('bad');
+        setTimeout(() => {
+          ca.classList.remove('flip', 'bad');
+          cb.classList.remove('flip', 'bad');
+          S.open = [];
+          S.lock = false;
+          Sound.bad();
+        }, 700);
+      }
+    }
+  }
+
+  function updateMeta(){
+    uiMeta.innerHTML = '已配对 <b>' + S.matched + '</b> / ' + S.pairs;
+  }
+
+  function win(){
+    stopTimer();
+    const s = save();
+    const prev = s.best;
+    const isBest = !prev || S.moves < prev;
+    if(isBest){ s.best = S.moves; s.pairs = S.pairs; }
+    s.plays = (s.plays || 0) + 1;
+    Store.set('save.memory', s);
+    Sound.win();
+    const perfect = S.pairs * 2;
+    const stars = S.moves <= perfect ? 3 : S.moves <= perfect * 1.6 ? 2 : 1;
+    plate({
+      kicker: 'CLEARED · ' + S.pairs + ' PAIRS',
+      title: isBest ? '刷新最少手数' : '全部配对',
+      sub: S.moves + ' 手 · ' + fmtTime(S.elapsed) + (prev && !isBest ? ' · 最好 ' + prev + ' 手' : ''),
+      stars: stars,
+      buttons: [
+        { label: '再来一局', kind: 'ink', onClick: () => reset() },
+        { label: '返回目录', onClick: () => Shell.back('../index.html') }
+      ]
+    });
+  }
+
+  function reset(){
+    stopTimer();
+    S.open = [];
+    S.matched = 0;
+    S.moves = 0;
+    S.elapsed = 0;
+    S.lock = false;
+    S.started = false;
+    uiMoves.textContent = '0';
+    uiTime.textContent = '0:00';
+    updateMeta();
+    build();
+    const s = save(); s.pairs = S.pairs; Store.set('save.memory', s);
+  }
+
+  /* ---------------- 事件 ---------------- */
+  Array.prototype.forEach.call(segPairs.children, b => {
+    b.addEventListener('click', () => {
+      S.pairs = +b.dataset.p;
+      Array.prototype.forEach.call(segPairs.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      reset();
+    });
+  });
+  document.getElementById('btnRestart').addEventListener('click', reset);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  const s0 = save();
+  S.pairs = s0.pairs || 8;
+  Array.prototype.forEach.call(segPairs.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.p === S.pairs));
+  });
+  reset();
+})();
+</script>
+</body>
+</html>

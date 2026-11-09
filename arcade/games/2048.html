@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>二〇四八 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;}
+  /* 棋盘像一块压了内框的毡面 */
+  .board{
+    position:relative;width:min(100%,440px);aspect-ratio:1/1;
+    background:linear-gradient(160deg,#E6DDCA 0%,#DDD3BE 100%);
+    border:1px solid var(--line-2);
+    border-radius:1px;
+    box-shadow:
+      var(--sh-deep),
+      inset 0 0 0 1px rgba(255,255,255,.40),
+      inset 0 0 30px rgba(31,28,22,.07);
+    touch-action:none;
+  }
+  /* 棋盘内框细线 */
+  .board::before{
+    content:"";position:absolute;inset:5px;pointer-events:none;z-index:1;
+    border:1px solid rgba(31,28,22,.09);
+  }
+  /* 格子是挖出来的凹槽 */
+  .cell{
+    position:absolute;width:25%;height:25%;padding:4px;z-index:0;
+  }
+  .cell i{
+    display:block;width:100%;height:100%;
+    background:rgba(31,28,22,.052);
+    box-shadow:inset 0 1px 2px rgba(31,28,22,.13), inset 0 -1px 0 rgba(255,255,255,.45);
+  }
+  .tile{
+    position:absolute;width:25%;height:25%;padding:4px;
+    transition:transform .115s cubic-bezier(.3,.9,.25,1);
+    z-index:2;
+  }
+  /* 方块：一块压边的瓷片，顶上有一道高光 */
+  .tile__face{
+    position:relative;
+    width:100%;height:100%;display:grid;place-items:center;
+    background:var(--paper-hi);
+    border:1px solid rgba(31,28,22,.14);
+    border-radius:1px;
+    font-family:var(--serif);font-weight:600;color:var(--ink);
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em;
+    box-shadow:
+      0 1px 0 rgba(31,28,22,.14),
+      0 3px 5px -3px rgba(31,28,22,.45),
+      inset 0 1px 0 rgba(255,255,255,.75);
+    transition:background .16s,color .16s;
+    overflow:hidden;
+  }
+  .tile__face::after{
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(180deg,rgba(255,255,255,.28) 0%,rgba(255,255,255,0) 46%);
+  }
+  .tile__face span{position:relative;z-index:1}
+  .tile.new .tile__face{animation:appear .2s var(--ease)}
+  .tile.merged{z-index:3}
+  /* 合成：弹一下 + 一圈朱红余晖 */
+  .tile.merged .tile__face{animation:merge .28s var(--ease)}
+  .tile.merged .tile__face::before{
+    content:"";position:absolute;inset:-1px;z-index:2;pointer-events:none;
+    box-shadow:inset 0 0 0 2px rgba(255,246,238,.85);
+    animation:halo .34s ease-out forwards;
+  }
+  @keyframes appear{from{transform:scale(.24);opacity:0}to{transform:scale(1);opacity:1}}
+  @keyframes merge{
+    0%{transform:scale(1)}
+    42%{transform:scale(1.16)}
+    70%{transform:scale(.98)}
+    100%{transform:scale(1)}
+  }
+  @keyframes halo{from{opacity:.9}to{opacity:0}}
+  .board.over .tile{opacity:.42;filter:grayscale(.5)}
+  .hint{
+    font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2);
+    text-align:center;margin-top:10px;line-height:1.6;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">IV · 2048</div>
+      <h1>二〇四八</h1>
+    </div>
+    <div class="bar__meta">分数 <b id="uiScore">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board">
+      <div class="hint" id="uiHint" style="position:absolute;left:0;right:0;bottom:-26px">滑动 / 方向键</div>
+    </div>
+    <div class="plinth">
+      <span>最高 <b id="uiBest">0</b></span>
+      <span class="r" id="uiMax">最大 0</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn" id="btnRestart">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新的一局
+    </button>
+    <span class="sep"></span>
+    <button class="btn btn--sq" id="btnSound" title="声音" aria-label="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, fmtNum, haptic } = Shell;
+
+  const G = 4;
+  const board = document.getElementById('board');
+  const stage = document.getElementById('stage');
+  const uiScore = document.getElementById('uiScore');
+  const uiBest = document.getElementById('uiBest');
+  const uiMax = document.getElementById('uiMax');
+  const btnSound = document.getElementById('btnSound');
+
+  const PALETTE = {
+    2:    { bg:'#FBF8F1', fg:'#1F1C16' },
+    4:    { bg:'#F3EAD6', fg:'#1F1C16' },
+    8:    { bg:'#E8D3A8', fg:'#3A2E18' },
+    16:   { bg:'#DDBA78', fg:'#3A2E18' },
+    32:   { bg:'#D19A50', fg:'#FFF9EE' },
+    64:   { bg:'#C4713A', fg:'#FFF9EE' },
+    128:  { bg:'#B0472E', fg:'#FFF6EE' },
+    256:  { bg:'#9C3A26', fg:'#FFF6EE' },
+    512:  { bg:'#8A2F1E', fg:'#FFF6EE' },
+    1024: { bg:'#2C2921', fg:'#FFF6EE' },
+    2048: { bg:'#1F1C16', fg:'#F2C879' },
+    4096: { bg:'#14120E', fg:'#F2C879' }
+  };
+
+  const saved = Store.get('save.g2048', {}) || {};
+  const S = {
+    grid: [],          // grid[r][c] = 方块 | null
+    tiles: [],         // 场上所有方块
+    score: 0,
+    best: saved.best || 0,
+    maxTile: 0,
+    over: false,
+    won: false,
+    lock: false,       // 合并动画期间锁住，避免状态错乱
+    queued: null       // 锁住时缓存一次输入，手感不丢
+  };
+
+  uiBest.textContent = fmtNum(S.best);
+
+  /* 静态格子底纹 */
+  for(let i = 0; i < G * G; i++){
+    const c = document.createElement('div');
+    c.className = 'cell';
+    c.style.transform = 'translate(' + (i % G) * 100 + '%,' + ((i / G) | 0) * 100 + '%)';
+    c.innerHTML = '<i></i>';
+    board.appendChild(c);
+  }
+
+  function paint(t){
+    const p = PALETTE[t.v] || PALETTE[4096];
+    const f = t.el.firstChild;
+    f.style.background = p.bg;
+    f.style.color = p.fg;
+    f.textContent = t.v;
+    const len = String(t.v).length;
+    f.style.fontSize = len > 4 ? 'clamp(11px,3.8vw,19px)' : len > 3 ? 'clamp(14px,5vw,24px)' : len > 2 ? 'clamp(18px,6.2vw,30px)' : 'clamp(23px,7.8vw,38px)';
+  }
+  function place(t){
+    t.el.style.transform = 'translate(' + t.c * 100 + '%,' + t.r * 100 + '%)';
+  }
+
+  function makeTile(r, c, v){
+    const el = document.createElement('div');
+    el.className = 'tile new';
+    el.innerHTML = '<div class="tile__face"></div>';
+    const t = { r: r, c: c, v: v, el: el };
+    place(t);                       // 先定位再插入，避免从左上角滑入
+    board.appendChild(el);
+    paint(t);
+    setTimeout(() => el.classList.remove('new'), 220);
+    S.grid[r][c] = t;
+    S.tiles.push(t);
+    return t;
+  }
+
+  function emptyCells(){
+    const out = [];
+    for(let r = 0; r < G; r++) for(let c = 0; c < G; c++) if(!S.grid[r][c]) out.push([r, c]);
+    return out;
+  }
+  function addRandom(){
+    const cells = emptyCells();
+    if(!cells.length) return null;
+    const [r, c] = cells[(Math.random() * cells.length) | 0];
+    return makeTile(r, c, Math.random() < 0.9 ? 2 : 4);
+  }
+
+  function scoreBoard(){
+    let mx = 0;
+    for(const t of S.tiles) if(t.v > mx) mx = t.v;
+    return mx;
+  }
+
+  function persist(){
+    const s = Store.get('save.g2048', {}) || {};
+    s.best = Math.max(s.best || 0, S.best);
+    s.max = Math.max(s.max || 0, S.maxTile);
+    Store.set('save.g2048', s);
+  }
+
+  /* ---------------- 一行/一列的滑动 ---------------- */
+  function slide(dir){
+    if(S.over || S.lock) return;
+    const horizontal = dir === 'left' || dir === 'right';
+    const forward = dir === 'left' || dir === 'up';
+    let moved = false, gained = 0;
+    const merges = [];
+
+    for(let i = 0; i < G; i++){
+      // 这一行/列的坐标，按移动方向排列（靠前 = 先落位）
+      const cells = [];
+      for(let k = 0; k < G; k++) cells.push(horizontal ? [i, k] : [k, i]);
+      if(!forward) cells.reverse();
+
+      const line = cells.map(([r, c]) => S.grid[r][c]).filter(Boolean);
+      let pos = 0;
+
+      for(let k = 0; k < line.length; k++){
+        const t = line[k];
+        const n = line[k + 1];
+        const [tr, tc] = cells[pos];
+
+        if(n && n.v === t.v){
+          // 合并：n 滑到 t 的位置，然后消失；t 的值翻倍
+          if(n.r !== tr || n.c !== tc) moved = true;
+          n.r = tr; n.c = tc; place(n);
+          if(t.r !== tr || t.c !== tc) moved = true;
+          t.r = tr; t.c = tc; place(t);
+          merges.push([t, n]);
+          gained += t.v * 2;
+          moved = true;
+          pos++;
+          k++;
+          continue;
+        }
+
+        if(t.r !== tr || t.c !== tc) moved = true;
+        t.r = tr; t.c = tc; place(t);
+        pos++;
+      }
+    }
+
+    if(!moved) return;
+
+    S.lock = true;
+    Sound.tone(190 + Math.random() * 40, .06, 'triangle', .05);
+    haptic(5);
+
+    setTimeout(() => {
+      merges.forEach(([t, n]) => {
+        n.el.remove();
+        const i = S.tiles.indexOf(n);
+        if(i >= 0) S.tiles.splice(i, 1);
+        t.v *= 2;
+        paint(t);
+        t.el.classList.add('merged');
+        setTimeout(() => t.el.classList.remove('merged'), 260);
+      });
+
+      // 重建索引（合并后的位置才是唯一的）
+      for(let r = 0; r < G; r++) for(let c = 0; c < G; c++) S.grid[r][c] = null;
+      for(const t of S.tiles) S.grid[t.r][t.c] = t;
+
+      S.score += gained;
+      uiScore.textContent = fmtNum(S.score);
+      if(gained){
+        Shell.bump(uiScore);
+        Shell.floatNum(board, '+' + gained);
+      }
+      if(S.score > S.best){ S.best = S.score; uiBest.textContent = fmtNum(S.best); }
+
+      const mx = scoreBoard();
+      if(mx > S.maxTile){ S.maxTile = mx; uiMax.textContent = '最大 ' + mx; }
+
+      addRandom();
+      persist();
+      S.lock = false;
+
+      check();
+
+      const queued = S.queued;
+      S.queued = null;
+      if(queued) slide(queued);
+    }, 108);
+  }
+
+  function request(dir){
+    if(S.over) return;
+    if(S.lock){ S.queued = dir; return; }
+    slide(dir);
+  }
+
+  function canMove(){
+    if(S.tiles.length < G * G) return true;
+    for(let r = 0; r < G; r++) for(let c = 0; c < G; c++){
+      const t = S.grid[r][c];
+      if(!t) return true;
+      if(c < G - 1 && S.grid[r][c + 1] && S.grid[r][c + 1].v === t.v) return true;
+      if(r < G - 1 && S.grid[r + 1][c] && S.grid[r + 1][c].v === t.v) return true;
+    }
+    return false;
+  }
+
+  function check(){
+    const mx = scoreBoard();
+    if(mx >= 2048 && !S.won){
+      S.won = true;
+      Sound.win();
+      plate({
+        kicker: '2048',
+        title: '撞出二〇四八',
+        sub: '得分 ' + fmtNum(S.score) + ' · 还能继续往上撞',
+        stars: 3,
+        buttons: [
+          { label: '继续挑战', kind: 'ink', onClick: () => {} },
+          { label: '重新开始', onClick: () => reset() }
+        ]
+      });
+      return;
+    }
+    if(!canMove()){
+      S.over = true;
+      board.classList.add('over');
+      Sound.lose();
+      const s = Store.get('save.g2048', {}) || {};
+      s.best = Math.max(s.best || 0, S.score);
+      s.max = Math.max(s.max || 0, mx);
+      s.plays = (s.plays || 0) + 1;
+      Store.set('save.g2048', s);
+      plate({
+        kicker: 'GAME OVER',
+        title: '格子满了',
+        sub: '得分 ' + fmtNum(S.score) + ' · 最大方块 ' + mx,
+        buttons: [
+          { label: '再来一局', kind: 'ink', onClick: () => reset() },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }
+  }
+
+  function reset(){
+    S.tiles.forEach(t => t.el.remove());
+    S.tiles = [];
+    S.grid = [];
+    for(let r = 0; r < G; r++) S.grid.push(new Array(G).fill(null));
+    S.score = 0;
+    S.maxTile = 0;
+    S.over = false;
+    S.won = false;
+    S.lock = false;
+    S.queued = null;
+    board.classList.remove('over');
+    uiScore.textContent = '0';
+    uiMax.textContent = '最大 0';
+    addRandom(); addRandom();
+  }
+
+  /* ---------------- 输入 ---------------- */
+  const KEYS = {
+    ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+    a: 'left', d: 'right', w: 'up', s: 'down', A: 'left', D: 'right', W: 'up', S: 'down'
+  };
+  document.addEventListener('keydown', e => {
+    if(document.querySelector('.overlay.show')) return;
+    const d = KEYS[e.key];
+    if(d){ e.preventDefault(); request(d); }
+  });
+  Shell.swipe(stage, d => request(d));
+
+  document.getElementById('btnRestart').addEventListener('click', reset);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+
+  function paintSound(){
+    btnSound.innerHTML = Sound.on
+      ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l5 4V5L7 9H4Z"/><path d="M16 10l4 4M20 10l-4 4"/></svg>';
+  }
+  paintSound();
+  btnSound.addEventListener('click', () => { Sound.toggle(); paintSound(); });
+
+  const s0 = Store.get('save.g2048', {}) || {};
+  s0.plays = s0.plays || 0;
+  Store.set('save.g2048', s0);
+
+  reset();
+})();
+</script>
+</body>
+</html>

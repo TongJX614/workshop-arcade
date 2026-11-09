@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>数织 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:10px}
+  .wrap{
+    width:min(100%,460px);display:grid;
+    grid-template-columns:var(--h) 1fr;grid-template-rows:var(--h) auto;
+    border:1px solid var(--line-2);background:var(--paper-hi);
+    box-shadow:var(--sh-deep);
+  }
+  .corner{border-right:1px solid var(--line-2);border-bottom:1px solid var(--line-2);position:relative}
+  .corner::after{
+    content:"";position:absolute;inset:18%;background:repeating-linear-gradient(135deg,rgba(31,28,22,.10) 0 1px,transparent 1px 6px);
+  }
+  .clues-top,.clues-left{display:grid;font-family:var(--serif);font-variant-numeric:tabular-nums}
+  .clues-top{
+    grid-template-columns:repeat(var(--n),1fr);
+    border-bottom:1px solid var(--line-2);
+  }
+  .clues-left{
+    grid-template-rows:repeat(var(--n),1fr);
+    border-right:1px solid var(--line-2);
+  }
+  .clue{
+    display:flex;align-items:flex-end;justify-content:center;gap:5px;
+    font-size:clamp(8px,2.1vw,10.5px);color:var(--ink-2);padding-bottom:2px;line-height:1.05;
+    font-weight:600;
+  }
+  .clues-left .clue{
+    align-items:center;justify-content:flex-end;padding:0 5px 0 0;gap:5px;
+  }
+  .clue span{display:block;min-width:.62em;text-align:center}
+  .clue span.zero{color:var(--ink-3);opacity:.6;font-weight:400}
+  .clue.done{color:var(--accent)}
+  .grid{
+    display:grid;grid-template-columns:repeat(var(--n),1fr);grid-template-rows:repeat(var(--n),1fr);
+    aspect-ratio:1/1;
+  }
+  .cell{
+    appearance:none;border:0;padding:0;background:#FBF8F1;cursor:pointer;position:relative;
+    box-shadow:inset -1px 0 0 rgba(31,28,22,.10),inset 0 -1px 0 rgba(31,28,22,.10);
+    -webkit-tap-highlight-color:transparent;transition:background .12s;
+  }
+  .cell:hover{background:#F5EFE1}
+  .cell.fill{background:#2A241C}
+  .cell.fill::after{
+    content:"";position:absolute;inset:0;background:linear-gradient(140deg,rgba(255,255,255,.13),transparent 60%);
+  }
+  .cell.cross::before,.cell.cross::after{
+    content:"";position:absolute;left:50%;top:50%;width:52%;height:1px;background:var(--ink-3);
+    transform:translate(-50%,-50%) rotate(45deg);
+  }
+  .cell.cross::after{transform:translate(-50%,-50%) rotate(-45deg)}
+  .cell.bad{background:#F3DCD4}
+  .cell.bad::after{content:"";position:absolute;inset:22%;border:1px solid var(--accent)}
+  .cell.pop{animation:cellPop .18s ease}
+  @keyframes cellPop{from{transform:scale(.86)}to{transform:none}}
+  .legend{display:flex;gap:16px;font-family:var(--serif);font-size:11px;letter-spacing:.1em;color:var(--ink-2)}
+  .legend i{font-style:normal;color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XVII · Nonogram</div>
+      <h1>数织</h1>
+    </div>
+    <div class="bar__meta">填 <b id="uiFill">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="wrap" id="wrap">
+      <div class="corner"></div>
+      <div class="clues-top" id="top"></div>
+      <div class="clues-left" id="left"></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <div class="plinth">
+      <span>已填 <b id="uiFill2">0</b> / <span id="uiNeed">0</span> 格</span>
+      <span class="r" id="uiState">进行中</span>
+    </div>
+    <div class="legend"><span>点：<i>填格</i></span><span>长按 / 右键：<i>打叉</i></span></div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segSize">
+      <button data-n="5">5 × 5</button>
+      <button data-n="8">8 × 8</button>
+      <button data-n="10">10 × 10</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新题
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const wrap = document.getElementById('wrap');
+  const topEl = document.getElementById('top');
+  const leftEl = document.getElementById('left');
+  const gridEl = document.getElementById('grid');
+  const uiFill = document.getElementById('uiFill');
+  const uiFill2 = document.getElementById('uiFill2');
+  const uiNeed = document.getElementById('uiNeed');
+  const uiState = document.getElementById('uiState');
+  const segSize = document.getElementById('segSize');
+
+  const S = { n: 8, sol: [], marks: [], els: [], done: false, need: 0 };
+
+  function save(){ return Store.get('save.nonogram', {}) || {}; }
+
+  function runs(arr){
+    const out = [];
+    let len = 0;
+    for(const v of arr){
+      if(v) len++;
+      else if(len){ out.push(len); len = 0; }
+    }
+    if(len) out.push(len);
+    return out.length ? out : [0];
+  }
+
+  function generate(){
+    const n = S.n;
+    const half = Math.ceil(n / 2);
+    /* 用几个矩形块拼出图案再左右镜像：
+       比纯随机像素更像「一张图」，每行的提示段数也少，能推理 */
+    for(let tries = 0; tries < 40; tries++){
+      const g = [];
+      for(let r = 0; r < n; r++) g.push(new Array(n).fill(0));
+      const blocks = 3 + (Math.random() * 3 | 0);
+      for(let b = 0; b < blocks; b++){
+        const h = 1 + (Math.random() * Math.min(4, n - 1) | 0);
+        const w = 1 + (Math.random() * half | 0);
+        const r0 = Math.random() * (n - h + 1) | 0;
+        const c0 = Math.random() * Math.max(1, half - w + 1) | 0;
+        for(let r = r0; r < r0 + h && r < n; r++){
+          for(let c = c0; c < c0 + w && c < half; c++){
+            g[r][c] = 1;
+            g[r][n - 1 - c] = 1;
+          }
+        }
+      }
+      let cnt = 0;
+      g.forEach(row => row.forEach(v => cnt += v));
+      const ratio = cnt / (n * n);
+      if(ratio < 0.34 || ratio > 0.72) continue;
+      S.sol = g;
+      S.need = cnt;
+      return;
+    }
+    /* 兜底：整块中间一坨，保证一定有解 */
+    S.sol = [];
+    for(let r = 0; r < n; r++){
+      S.sol.push([]);
+      for(let c = 0; c < n; c++) S.sol[r].push(r > 0 && r < n - 1 && c > 0 && c < n - 1 ? 1 : 0);
+    }
+    S.need = S.sol.reduce((a, row) => a + row.reduce((x, v) => x + v, 0), 0);
+  }
+
+  function build(){
+    const n = S.n;
+    wrap.style.setProperty('--n', n);
+    const pad = n <= 5 ? 30 : n <= 8 ? 42 : 48;
+    wrap.style.setProperty('--h', pad + 'px');
+
+    // 顶部提示
+    topEl.innerHTML = '';
+    topEl.style.gridTemplateColumns = 'repeat(' + n + ',1fr)';
+    for(let c = 0; c < n; c++){
+      const col = S.sol.map(row => row[c]);
+      const d = document.createElement('div');
+      d.className = 'clue';
+      d.dataset.c = c;
+      d.innerHTML = runs(col).map(v => '<span>' + v + '</span>').join('');
+      topEl.appendChild(d);
+    }
+    // 左侧提示
+    leftEl.innerHTML = '';
+    leftEl.style.gridTemplateRows = 'repeat(' + n + ',1fr)';
+    for(let r = 0; r < n; r++){
+      const d = document.createElement('div');
+      d.className = 'clue';
+      d.dataset.r = r;
+      d.innerHTML = runs(S.sol[r]).map(v => '<span>' + v + '</span>').join('');
+      leftEl.appendChild(d);
+    }
+    // 格子
+    gridEl.innerHTML = '';
+    gridEl.style.gridTemplateColumns = 'repeat(' + n + ',1fr)';
+    gridEl.style.gridTemplateRows = 'repeat(' + n + ',1fr)';
+    S.els = [];
+    S.marks = [];
+    for(let i = 0; i < n * n; i++){
+      S.marks.push(0);
+      const b = document.createElement('button');
+      b.className = 'cell';
+      b.dataset.i = i;
+      bind(b, i);
+      gridEl.appendChild(b);
+      S.els.push(b);
+    }
+    paint();
+  }
+
+  function bind(b, i){
+    let t = 0, long = false;
+    b.addEventListener('pointerdown', e => {
+      if(e.button != null && e.button !== 0) return;
+      long = false;
+      t = setTimeout(() => { long = true; cycle(i, true); haptic(12); }, 340);
+    });
+    const cancel = () => clearTimeout(t);
+    b.addEventListener('pointerup', cancel);
+    b.addEventListener('pointerleave', cancel);
+    b.addEventListener('pointercancel', cancel);
+    b.addEventListener('click', () => {
+      if(long){ long = false; return; }
+      cycle(i, false);
+    });
+    b.addEventListener('contextmenu', e => { e.preventDefault(); cycle(i, true); });
+  }
+
+  function cycle(i, crossOnly){
+    if(S.done) return;
+    // 0 空 → 1 填 → 2 叉 → 0
+    if(crossOnly) S.marks[i] = S.marks[i] === 2 ? 0 : 2;
+    else S.marks[i] = (S.marks[i] + 1) % 3;
+    Sound.tone(S.marks[i] === 1 ? 520 : 380, .04, 'sine', .05);
+    haptic(6);
+    paint();
+    check();
+  }
+
+  function paint(){
+    let filled = 0;
+    for(let i = 0; i < S.els.length; i++){
+      const el = S.els[i];
+      el.className = 'cell' + (S.marks[i] === 1 ? ' fill' : S.marks[i] === 2 ? ' cross' : '');
+      if(S.marks[i] === 1) filled++;
+    }
+    uiFill.textContent = filled;
+    uiFill2.textContent = filled;
+    uiNeed.textContent = S.need;
+    // 提示淡出：该行/列的块数已对上就变朱红
+    const n = S.n;
+    for(let c = 0; c < n; c++){
+      let colFill = 0, colCross = 0;
+      for(let r = 0; r < n; r++){
+        const m = S.marks[r * n + c];
+        if(m === 1) colFill++; else if(m === 2) colCross++;
+      }
+      const clue = topEl.children[c];
+      if(clue) clue.classList.toggle('done', colFill + colCross === n);
+    }
+    for(let r = 0; r < n; r++){
+      let f = 0, x = 0;
+      for(let c = 0; c < n; c++){
+        const m = S.marks[r * n + c];
+        if(m === 1) f++; else if(m === 2) x++;
+      }
+      const clue = leftEl.children[r];
+      if(clue) clue.classList.toggle('done', f + x === n);
+    }
+  }
+
+  /* 用「每行每列的连续块」判定，允许玩家填出与原图不同但同样成立的解；
+     空着不打叉也算「不填」，不强制上完所有叉 */
+  function check(){
+    const n = S.n;
+    for(let r = 0; r < n; r++){
+      const row = [];
+      for(let c = 0; c < n; c++) row.push(S.marks[r * n + c] === 1 ? 1 : 0);
+      const a = runs(row).join(','), b = runs(S.sol[r]).join(',');
+      if(a !== b) return;
+    }
+    for(let c = 0; c < n; c++){
+      const col = [];
+      for(let r = 0; r < n; r++) col.push(S.marks[r * n + c] === 1 ? 1 : 0);
+      const a = runs(col).join(',');
+      const b = runs(S.sol.map(row => row[c])).join(',');
+      if(a !== b) return;
+    }
+    win();
+  }
+
+  function win(){
+    S.done = true;
+    uiState.textContent = '完成';
+    Sound.win();
+    haptic([10, 30, 12]);
+    Shell.flash(gridEl, 460);
+    const sv = save();
+    sv.wins = (sv.wins || 0) + 1;
+    sv['done' + S.n] = (sv['done' + S.n] || 0) + 1;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.nonogram', sv);
+    setTimeout(() => {
+      plate({
+        kicker: 'PICTURE FOUND',
+        title: '图案显形',
+        sub: S.n + ' × ' + S.n + ' · 已填 ' + S.need + ' 格',
+        stars: S.n >= 10 ? 3 : S.n >= 8 ? 2 : 1,
+        buttons: [
+          { label: '再来一题', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function newGame(){
+    S.done = false;
+    uiState.textContent = '进行中';
+    generate();
+    build();
+  }
+
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.addEventListener('click', () => {
+      S.n = +b.dataset.n;
+      Array.prototype.forEach.call(segSize.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.n = S.n; Store.set('save.nonogram', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.n = [5, 8, 10].indexOf(save().n) >= 0 ? save().n : 8;
+  Array.prototype.forEach.call(segSize.children, b => {
+    b.setAttribute('aria-pressed', String(+b.dataset.n === S.n));
+  });
+  newGame();
+})();
+</script>
+</body>
+</html>

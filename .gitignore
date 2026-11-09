@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# 开发期本地文件
+.workbuddy/
+*.genie
+arcade/_*.png
+
+# Android 构建产物与签名
+android/build/
+android/.stale_assets/
+android/keystore.jks
+android/dist/*
+!android/dist/工坊游戏集-v1.7.apk

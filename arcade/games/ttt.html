@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>井字棋 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 44px;gap:14px}
+  .board{
+    position:relative;width:min(100%,340px);aspect-ratio:1/1;
+    display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
+    gap:1px;background:var(--line-2);
+    border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);
+  }
+  .sq{
+    appearance:none;border:0;background:var(--paper-hi);cursor:pointer;position:relative;
+    display:grid;place-items:center;padding:0;
+    transition:background .14s;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .sq:not(.taken):hover::after{
+    content:"";width:34%;height:34%;border-radius:50%;
+    background:rgba(31,28,22,.10);
+  }
+  .ttt-mark{
+    width:64%;height:64%;pointer-events:none;
+    animation:markIn .26s var(--ease) backwards;
+  }
+  @keyframes markIn{from{opacity:0;transform:scale(.6) rotate(-8deg)}to{opacity:1;transform:none}}
+  .ttt-mark path{stroke-linecap:round;stroke-linejoin:round;fill:none}
+  .x path{stroke:var(--ink);stroke-width:4.2}
+  .o path{stroke:var(--accent);stroke-width:3.6}
+  .sq.win{background:rgba(180,64,44,.10)}
+  .sq.win::before{
+    content:"";position:absolute;inset:8%;border:1px solid rgba(180,64,44,.55);
+    animation:rim .4s var(--ease) backwards;
+  }
+  @keyframes rim{from{opacity:0;transform:scale(.86)}to{opacity:1;transform:none}}
+  .score{
+    display:flex;gap:0;border-top:1px solid var(--line-2);border-bottom:1px solid var(--line);
+    width:min(100%,340px);
+  }
+  .score div{flex:1 1 0;padding:8px 0;text-align:center;border-right:1px solid var(--line)}
+  .score div:last-child{border-right:0}
+  .score .k{font-family:var(--serif);font-size:8.5px;letter-spacing:.24em;color:var(--ink-3);text-transform:uppercase}
+  .score .v{font-family:var(--serif);font-size:18px;font-variant-numeric:tabular-nums;margin-top:2px}
+  .score .v.red{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XIV · Tic-Tac-Toe</div>
+      <h1>井字棋</h1>
+    </div>
+    <div class="bar__meta" id="uiTurn">你走</div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board" id="board"></div>
+    <div class="score">
+      <div><div class="k">胜</div><div class="v red" id="uiWin">0</div></div>
+      <div><div class="k">平</div><div class="v" id="uiDraw">0</div></div>
+      <div><div class="k">负</div><div class="v" id="uiLose">0</div></div>
+    </div>
+    <div class="plinth">
+      <span>执 <b>黑子</b> · <span id="uiMode">对机器</span></span>
+      <span class="r" id="uiHint">先手</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="seg" id="segMode">
+      <button data-m="easy">轻松</button>
+      <button data-m="hard">认真</button>
+      <button data-m="duo">两人</button>
+    </div>
+    <span class="sep"></span>
+    <button class="btn" id="btnNew">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      新局
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const boardEl = document.getElementById('board');
+  const uiTurn = document.getElementById('uiTurn');
+  const uiMode = document.getElementById('uiMode');
+  const uiHint = document.getElementById('uiHint');
+  const uiWin = document.getElementById('uiWin');
+  const uiDraw = document.getElementById('uiDraw');
+  const uiLose = document.getElementById('uiLose');
+  const segMode = document.getElementById('segMode');
+
+  const LINES = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6]
+  ];
+  const X = 1, O = -1;
+
+  const S = { b: [], mode: 'hard', turn: X, over: false, busy: false, els: [] };
+
+  function save(){ return Store.get('save.ttt', {}) || {}; }
+
+  function paintScore(){
+    const sv = save();
+    uiWin.textContent = sv.win || 0;
+    uiDraw.textContent = sv.draw || 0;
+    uiLose.textContent = sv.lose || 0;
+  }
+
+  function markSvg(v){
+    if(v === X){
+      return '<svg class="ttt-mark x" viewBox="0 0 40 40"><path d="M9 9 L31 31"/><path d="M31 9 L9 31"/></svg>';
+    }
+    return '<svg class="ttt-mark o" viewBox="0 0 40 40"><path d="M20 6.5a13.5 13.5 0 1 1 0 27 13.5 13.5 0 0 1 0-27Z"/></svg>';
+  }
+
+  function build(){
+    boardEl.innerHTML = '';
+    S.els = [];
+    for(let i = 0; i < 9; i++){
+      const b = document.createElement('button');
+      b.className = 'sq';
+      b.dataset.i = i;
+      b.addEventListener('click', () => human(i));
+      boardEl.appendChild(b);
+      S.els.push(b);
+    }
+  }
+
+  function paint(){
+    for(let i = 0; i < 9; i++){
+      const el = S.els[i], v = S.b[i];
+      el.className = 'sq' + (v ? ' taken' : '');
+      el.innerHTML = v ? markSvg(v) : '';
+    }
+    const duo = S.mode === 'duo';
+    uiMode.textContent = duo ? '两人轮走' : (S.mode === 'hard' ? '对机器 · 认真' : '对机器 · 轻松');
+    uiTurn.textContent = S.over ? '结束' : (duo ? (S.turn === X ? '黑子走' : '朱子走') : (S.turn === X ? '你走' : '机器想'));
+    uiHint.textContent = duo ? '轮流落子' : '你执黑先行';
+  }
+
+  function winner(b){
+    for(const L of LINES){
+      const s = b[L[0]];
+      if(s && s === b[L[1]] && s === b[L[2]]) return { who: s, line: L };
+    }
+    return b.indexOf(0) < 0 ? { who: 0, line: null } : null;
+  }
+
+  function human(i){
+    if(S.over || S.busy || S.b[i]) return;
+    if(S.mode !== 'duo' && S.turn !== X) return;
+    place(i, S.turn);
+  }
+
+  function place(i, who){
+    if(S.over || S.b[i]) return;
+    S.b[i] = who;
+    S.turn = -who;
+    Sound.drop(who === X ? 1 : 3);
+    haptic(8);
+    paint();
+    const w = winner(S.b);
+    if(w){ finish(w); return; }
+    if(S.mode !== 'duo' && S.turn === O) aiTurn();
+  }
+
+  function aiTurn(){
+    S.busy = true;
+    setTimeout(() => {
+      const i = S.mode === 'easy' ? easyMove() : bestMove();
+      S.busy = false;
+      if(i >= 0 && !S.over) place(i, O);
+    }, 260);
+  }
+
+  function easyMove(){
+    const empty = [];
+    for(let i = 0; i < 9; i++) if(!S.b[i]) empty.push(i);
+    // 有 30% 概率直接下对，其余随机
+    if(Math.random() < 0.3) return bestMove();
+    return empty.length ? empty[Shell.rand(empty.length)] : -1;
+  }
+
+  function bestMove(){
+    let best = -Infinity, move = -1;
+    for(let i = 0; i < 9; i++){
+      if(S.b[i]) continue;
+      S.b[i] = O;
+      const sc = minimax(S.b, 0, false, -Infinity, Infinity);
+      S.b[i] = 0;
+      if(sc > best){ best = sc; move = i; }
+    }
+    return move;
+  }
+
+  function minimax(b, depth, maxing, alpha, beta){
+    const w = winner(b);
+    if(w){
+      if(w.who === O) return 10 - depth;
+      if(w.who === X) return depth - 10;
+      return 0;
+    }
+    if(maxing){
+      let best = -Infinity;
+      for(let i = 0; i < 9; i++){
+        if(b[i]) continue;
+        b[i] = O;
+        best = Math.max(best, minimax(b, depth + 1, false, alpha, beta));
+        b[i] = 0;
+        alpha = Math.max(alpha, best);
+        if(beta <= alpha) break;
+      }
+      return best;
+    }
+    let best = Infinity;
+    for(let i = 0; i < 9; i++){
+      if(b[i]) continue;
+      b[i] = X;
+      best = Math.min(best, minimax(b, depth + 1, true, alpha, beta));
+      b[i] = 0;
+      beta = Math.min(beta, best);
+      if(beta <= alpha) break;
+    }
+    return best;
+  }
+
+  function finish(w){
+    S.over = true;
+    paint();
+    const sv = save();
+    if(w.line) w.line.forEach(i => S.els[i].classList.add('win'));
+    if(w.who === 0){
+      sv.draw = (sv.draw || 0) + 1;
+      Sound.done();
+      Shell.toast('平局');
+      uiHint.textContent = '平局';
+      setTimeout(() => {
+        plate({ kicker: 'DRAW', title: '平局', sub: '棋盘下满了，谁也没连成三子',
+          buttons: [{ label: '再来一局', kind: 'ink', onClick: newGame }, { label: '返回目录', onClick: () => Shell.back('../index.html') }] });
+      }, 420);
+    }else{
+      const humanWin = S.mode === 'duo' ? true : w.who === X;
+      if(S.mode === 'duo'){
+        if(w.who === X) sv.win = (sv.win || 0) + 1; else sv.lose = (sv.lose || 0) + 1;
+      }else if(humanWin){
+        sv.win = (sv.win || 0) + 1;
+      }else{
+        sv.lose = (sv.lose || 0) + 1;
+      }
+      sv.plays = (sv.plays || 0) + 1;
+      Store.set('save.ttt', sv);
+      paintScore();
+      if(humanWin && S.mode !== 'duo'){
+        Sound.win(); haptic([10, 30, 12]);
+        Shell.flash(boardEl, 380);
+      }else{ Sound.lose(); haptic([10, 40]); }
+      const title = S.mode === 'duo'
+        ? (w.who === X ? '黑子连成三子' : '朱子连成三子')
+        : (humanWin ? '你赢了' : '机器赢了');
+      uiHint.textContent = title;
+      setTimeout(() => {
+        plate({
+          kicker: humanWin ? 'THREE IN A ROW' : 'LOST',
+          title: title,
+          sub: S.mode === 'duo' ? '两人对局' : (S.mode === 'hard' ? '认真模式' : '轻松模式'),
+          buttons: [{ label: '再来一局', kind: 'ink', onClick: newGame }, { label: '返回目录', onClick: () => Shell.back('../index.html') }]
+        });
+      }, 480);
+    }
+    Store.set('save.ttt', sv);
+  }
+
+  function newGame(){
+    S.b = new Array(9).fill(0);
+    S.turn = X;
+    S.over = false;
+    S.busy = false;
+    paint();
+  }
+
+  Array.prototype.forEach.call(segMode.children, b => {
+    b.addEventListener('click', () => {
+      S.mode = b.dataset.m;
+      Array.prototype.forEach.call(segMode.children, x => x.setAttribute('aria-pressed', String(x === b)));
+      const sv = save(); sv.mode = S.mode; Store.set('save.ttt', sv);
+      newGame();
+    });
+  });
+  document.getElementById('btnNew').addEventListener('click', newGame);
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  S.mode = save().mode || 'hard';
+  Array.prototype.forEach.call(segMode.children, b => {
+    b.setAttribute('aria-pressed', String(b.dataset.m === S.mode));
+  });
+  build();
+  paintScore();
+  newGame();
+})();
+</script>
+</body>
+</html>

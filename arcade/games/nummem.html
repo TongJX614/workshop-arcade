@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>数字记忆 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 36px;gap:16px}
+  .screen{
+    width:min(100%,420px);min-height:clamp(140px,34vh,190px);
+    display:grid;place-items:center;position:relative;
+    background:var(--paper-hi);border:1px solid var(--line-2);
+    box-shadow:var(--sh-deep);padding:18px;
+  }
+  .screen::before{
+    content:"";position:absolute;left:0;right:0;top:0;height:9px;
+    background-image:radial-gradient(circle at 5px 4px,rgba(31,28,22,.18) 1.5px,transparent 1.7px);
+    background-size:10px 10px;
+    border-bottom:1px dashed rgba(31,28,22,.16);
+  }
+  .num{
+    font-family:var(--serif);font-size:clamp(30px,9.4vw,46px);letter-spacing:.22em;
+    font-variant-numeric:tabular-nums;color:var(--ink);text-align:center;line-height:1.3;
+    word-break:break-all;
+  }
+  .num.dim{letter-spacing:.3em;color:var(--ink-3);font-size:clamp(15px,4.6vw,20px)}
+  .num.ok{color:#3C7A46}
+  .num.bad{color:var(--accent)}
+  .num .slot{color:var(--accent);border-bottom:2px solid var(--accent);padding:0 .04em}
+  .num .ph{color:rgba(31,28,22,.16)}
+  .pad{
+    display:grid;grid-template-columns:repeat(3,1fr);gap:6px;width:min(100%,300px);
+  }
+  .key{
+    appearance:none;height:clamp(44px,12vw,52px);cursor:pointer;
+    border:1px solid var(--line-2);background:var(--paper-hi);color:var(--ink);
+    font-family:var(--serif);font-size:19px;border-radius:2px;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.8);font-variant-numeric:tabular-nums;
+    transition:background .12s,transform .08s;
+  }
+  .key:active{transform:translateY(1px);background:rgba(31,28,22,.06)}
+  .key.wide{font-size:12px;letter-spacing:.14em;font-family:var(--sans)}
+  .key.go{border-color:var(--ink);background:var(--ink);color:var(--paper-hi)}
+  .hud{display:flex;align-items:baseline;gap:18px;font-family:var(--serif);font-size:10px;letter-spacing:.18em;color:var(--ink-3)}
+  .hud b{font-size:18px;color:var(--ink);font-weight:400;font-variant-numeric:tabular-nums}
+  .hud .t{color:var(--accent)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XXXVI · Number Memory</div>
+      <h1>数字记忆</h1>
+    </div>
+    <div class="bar__meta">位 <b id="uiLen">3</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="hud"><span>当前 <b id="uiLen2">3</b> 位</span><span>最长 <b class="t" id="uiBest">0</b> 位</span></div>
+    <div class="screen" id="screen">
+      <div class="num dim" id="num">点「开始」看第一串</div>
+    </div>
+    <div class="pad" id="pad"></div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnStart">开始</button>
+    <button class="btn" id="btnClear">清空</button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const numEl = document.getElementById('num');
+  const padEl = document.getElementById('pad');
+  const uiLen = document.getElementById('uiLen');
+  const uiLen2 = document.getElementById('uiLen2');
+  const uiBest = document.getElementById('uiBest');
+
+  const START = 3;
+  const S = { len: START, target: '', input: '', phase: 'idle', best: 0, timer: 0 };
+
+  function save(){ return Store.get('save.nummem', {}) || {}; }
+
+  function buildPad(){
+    padEl.innerHTML = '';
+    const keys = ['1','2','3','4','5','6','7','8','9','del','0','ok'];
+    keys.forEach(k => {
+      const b = document.createElement('button');
+      if(k === 'del'){ b.className = 'key wide'; b.textContent = 'DELETE'; }
+      else if(k === 'ok'){ b.className = 'key wide go'; b.textContent = '确认'; }
+      else{ b.className = 'key'; b.textContent = k; }
+      b.dataset.k = k;
+      b.addEventListener('click', () => press(k));
+      padEl.appendChild(b);
+    });
+  }
+
+  function paintNum(){
+    if(S.phase === 'input'){
+      let html = '';
+      for(let i = 0; i < S.target.length; i++){
+        if(i < S.input.length) html += '<span class="slot">' + S.input[i] + '</span>';
+        else{
+          // 已经输入的位数用占位点表示，不泄露原数字
+          html += '<span class="ph">·</span>';
+        }
+      }
+      numEl.innerHTML = html;
+      numEl.className = 'num';
+    }
+  }
+
+  function show(){
+    S.phase = 'show';
+    S.input = '';
+    S.target = '';
+    for(let i = 0; i < S.len; i++) S.target += String(Shell.rand(10));
+    numEl.className = 'num';
+    numEl.textContent = S.target;
+    uiLen.textContent = S.len;
+    uiLen2.textContent = S.len;
+    Sound.tone(700, .06, 'sine', .07);
+    let left = Math.max(1100, 700 + S.len * 240);
+    clearTimeout(S.timer);
+    S.timer = setTimeout(() => {
+      S.phase = 'input';
+      paintNum();
+      // 输入阶段显示占位
+      let html = '';
+      for(let i = 0; i < S.target.length; i++) html += '<span class="ph">·</span>';
+      numEl.innerHTML = html;
+      Sound.tone(420, .05, 'triangle', .06);
+    }, left);
+  }
+
+  function press(k){
+    if(S.phase !== 'input') return;
+    if(k === 'del'){
+      S.input = S.input.slice(0, -1);
+      paintNum();
+      Sound.tone(300, .04, 'sine', .05);
+      return;
+    }
+    if(k === 'ok'){ confirm(); return; }
+    if(S.input.length >= S.target.length) return;
+    S.input += k;
+    Sound.tone(480 + (+k) * 20, .04, 'sine', .05);
+    haptic(4);
+    paintNum();
+    if(S.input.length === S.target.length) setTimeout(confirm, 180);
+  }
+
+  function confirm(){
+    if(S.phase !== 'input') return;
+    S.phase = 'check';
+    const ok = S.input === S.target;
+    if(ok){
+      numEl.className = 'num ok';
+      numEl.textContent = S.target;
+      Sound.done();
+      haptic([8, 24, 8]);
+      S.best = Math.max(S.best, S.len);
+      S.len++;
+      uiBest.textContent = S.best;
+      uiLen2.textContent = S.len;
+      const sv = save();
+      if(S.best > (sv.best || 0)){ sv.best = S.best; Store.set('save.nummem', sv); }
+      S.phase = 'wait';
+      setTimeout(show, 620);
+    }else{
+      numEl.className = 'num bad';
+      numEl.innerHTML = '<div style="font-size:.52em;letter-spacing:.14em">' +
+        '你输入 ' + (S.input || '—') + '</div><div style="font-size:.62em;margin-top:.3em;color:var(--ink-2)">' +
+        '正确 ' + S.target + '</div>';
+      Sound.lose();
+      haptic([14, 40]);
+      S.phase = 'over';
+      setTimeout(over, 900);
+    }
+  }
+
+  function over(){
+    const sv = save();
+    sv.plays = (sv.plays || 0) + 1;
+    if(S.best > (sv.best || 0)) sv.best = S.best;
+    Store.set('save.nummem', sv);
+    plate({
+      kicker: 'MISMATCH',
+      title: '记岔了',
+      sub: '记住了 ' + S.best + ' 位 · 从 ' + START + ' 位重新开始',
+      stars: S.best >= 9 ? 3 : S.best >= 7 ? 2 : S.best >= 5 ? 1 : 0,
+      buttons: [
+        { label: '再来一次', kind: 'ink', onClick: start },
+        { label: '返回目录', onClick: () => Shell.back('../index.html') }
+      ]
+    });
+  }
+
+  function start(){
+    S.len = START;
+    S.best = 0;
+    S.input = '';
+    uiBest.textContent = '0';
+    uiLen2.textContent = S.len;
+    show();
+  }
+
+  (function(){
+    var b = document.getElementById('btnStart');
+    b.addEventListener('click', function(){ start(); b.textContent = '重开'; });
+  })();
+  document.getElementById('btnClear').addEventListener('click', () => {
+    if(S.phase !== 'input') return;
+    S.input = '';
+    paintNum();
+  });
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  document.addEventListener('keydown', e => {
+    if(e.key >= '0' && e.key <= '9') press(e.key);
+    if(e.key === 'Backspace') press('del');
+    if(e.key === 'Enter') press('ok');
+    if(e.key === ' ' && S.phase === 'idle'){ e.preventDefault(); start(); }
+  });
+
+  buildPad();
+  const sv0 = save();
+  uiBest.textContent = sv0.best || 0;
+  uiLen2.textContent = START;
+  uiLen.textContent = START;
+})();
+</script>
+</body>
+</html>

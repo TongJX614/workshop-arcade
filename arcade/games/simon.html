@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#F2EEE4">
+<title>西蒙 · 工坊游戏集</title>
+<link rel="stylesheet" href="../assets/shell.css">
+<style>
+  .stage{padding:0 0 40px;gap:16px}
+  .pads{
+    display:grid;grid-template-columns:1fr 1fr;gap:clamp(8px,2.4vw,12px);
+    width:min(100%,340px);aspect-ratio:1/1;
+  }
+  .pad{
+    appearance:none;border:1px solid var(--line-2);border-radius:3px;cursor:pointer;
+    position:relative;overflow:hidden;
+    transition:transform .1s var(--ease),box-shadow .16s,filter .16s;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -3px 0 rgba(0,0,0,.18),
+               0 6px 12px -10px rgba(31,28,22,.9);
+    -webkit-tap-highlight-color:transparent;
+    filter:saturate(.86) brightness(.94);
+  }
+  .pad::after{
+    content:"";position:absolute;left:14%;top:11%;width:30%;height:16%;
+    border-radius:50%;background:rgba(255,255,255,.22);filter:blur(3px);
+  }
+  .pad[data-i="0"]{background:linear-gradient(160deg,#C9553D,#9A3623)}
+  .pad[data-i="1"]{background:linear-gradient(160deg,#4E7FB8,#2F5C90)}
+  .pad[data-i="2"]{background:linear-gradient(160deg,#D8B36A,#A9843A)}
+  .pad[data-i="3"]{background:linear-gradient(160deg,#4B463C,#221E18)}
+  .pad:active{transform:scale(.985)}
+  .pad.on{
+    filter:saturate(1.25) brightness(1.22);
+    box-shadow:0 0 0 1px rgba(255,255,255,.5),0 0 26px -4px currentColor,
+               inset 0 1px 0 rgba(255,255,255,.4);
+    transform:scale(.975);
+  }
+  .pad[data-i="0"].on{color:#E0603F}
+  .pad[data-i="1"].on{color:#5A8FCB}
+  .pad[data-i="2"].on{color:#E0B96B}
+  .pad[data-i="3"].on{color:#6A6355}
+  .pad.wrong{animation:shake .32s ease}
+  @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+  .seq{display:flex;gap:5px;justify-content:center;min-height:8px;flex-wrap:wrap;max-width:320px}
+  .seq i{width:5px;height:5px;background:var(--line-2);border-radius:50%}
+  .seq i.on{background:var(--accent);transform:scale(1.3)}
+  .seq i.now{background:var(--ink);transform:scale(1.4)}
+  .status{
+    font-family:var(--serif);font-size:11px;letter-spacing:.18em;color:var(--ink-3);
+    min-height:16px;text-align:center;
+  }
+  .status.live{color:var(--accent)}
+  .plinth b{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="bar">
+    <button class="bar__back" id="btnBack" aria-label="返回目录">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="bar__text">
+      <div class="kicker">XIX · Simon Says</div>
+      <h1>西蒙</h1>
+    </div>
+    <div class="bar__meta">序列 <b id="uiLen">0</b></div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="seq" id="seq"></div>
+    <div class="pads" id="pads"></div>
+    <div class="status" id="uiStatus">按「开始」看一遍</div>
+    <div class="plinth">
+      <span>本轮 <b id="uiLevel">1</b> 拍</span>
+      <span class="r" id="uiBest">最长 —</span>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn btn--ink" id="btnPlay">开始</button>
+    <button class="btn" id="btnReplay">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+      重播
+    </button>
+    <button class="btn btn--sq" id="btnSound" title="声音"></button>
+  </div>
+</div>
+
+<script src="../assets/shell.js"></script>
+<script>
+(function(){
+  'use strict';
+  const { Store, Sound, plate, haptic } = Shell;
+
+  const padsEl = document.getElementById('pads');
+  const seqEl = document.getElementById('seq');
+  const uiStatus = document.getElementById('uiStatus');
+  const uiLevel = document.getElementById('uiLevel');
+  const uiLen = document.getElementById('uiLen');
+  const uiBest = document.getElementById('uiBest');
+
+  // 高到低四个音，避免刺耳
+  const TONE = [392, 440, 523, 587];
+  const S = { seq: [], step: 0, level: 1, best: 0, playing: false, locked: true, timers: [] };
+
+  function save(){ return Store.get('save.simon', {}) || {}; }
+
+  function build(){
+    padsEl.innerHTML = '';
+    for(let i = 0; i < 4; i++){
+      const b = document.createElement('button');
+      b.className = 'pad';
+      b.dataset.i = i;
+      b.setAttribute('aria-label', '第 ' + (i + 1) + ' 块');
+      b.addEventListener('click', () => press(i));
+      padsEl.appendChild(b);
+    }
+  }
+
+  function light(i, ms){
+    const b = padsEl.children[i];
+    if(!b) return;
+    b.classList.add('on');
+    Sound.tone(TONE[i], .16, 'sine', .12);
+    setTimeout(() => b.classList.remove('on'), ms || 260);
+  }
+
+  function clearTimers(){
+    S.timers.forEach(t => clearTimeout(t));
+    S.timers = [];
+  }
+
+  function paintSeq(){
+    seqEl.innerHTML = '';
+    for(let i = 0; i < S.seq.length; i++){
+      const d = document.createElement('i');
+      if(i < S.step) d.className = 'on';
+      seqEl.appendChild(d);
+    }
+    uiLen.textContent = S.seq.length;
+    uiLevel.textContent = S.level;
+  }
+
+  function play(){
+    clearTimers();
+    S.playing = true;
+    S.locked = true;
+    S.step = 0;
+    paintSeq();
+    uiStatus.textContent = '看好了…';
+    uiStatus.classList.remove('live');
+    const gap = Math.max(320, 620 - S.seq.length * 14);
+    S.seq.forEach((v, i) => {
+      S.timers.push(setTimeout(() => light(v, 240), 380 + i * gap));
+    });
+    S.timers.push(setTimeout(() => {
+      S.playing = false;
+      S.locked = false;
+      uiStatus.textContent = '轮到你了';
+      uiStatus.classList.add('live');
+    }, 380 + S.seq.length * gap + 120));
+  }
+
+  function press(i){
+    if(S.playing || S.locked) return;
+    light(i, 200);
+    haptic(8);
+    if(S.seq[S.step] === i){
+      S.step++;
+      paintSeq();
+      if(S.step >= S.seq.length){
+        S.locked = true;
+        uiStatus.textContent = '对，再来一拍';
+        uiStatus.classList.remove('live');
+        S.level++;
+        Sound.done();
+        setTimeout(() => {
+          S.seq.push(Shell.rand(4));
+          paintSeq();
+          play();
+        }, 620);
+      }
+    }else{
+      fail(i);
+    }
+  }
+
+  function fail(i){
+    S.locked = true;
+    const b = padsEl.children[i];
+    if(b){ b.classList.add('wrong'); setTimeout(() => b.classList.remove('wrong'), 360); }
+    Sound.lose();
+    haptic([14, 40, 16]);
+    uiStatus.textContent = '踩错了';
+    const got = S.seq.length - 1;
+    const sv = save();
+    if(got > (sv.best || 0)) sv.best = got;
+    sv.plays = (sv.plays || 0) + 1;
+    Store.set('save.simon', sv);
+    uiBest.textContent = '最长 ' + (sv.best || 0) + ' 拍';
+    setTimeout(() => {
+      plate({
+        kicker: 'SEQUENCE BROKEN',
+        title: '记到第 ' + got + ' 拍',
+        sub: '再往上就是第 ' + S.seq.length + ' 拍了',
+        stars: got >= 10 ? 3 : got >= 6 ? 2 : got >= 3 ? 1 : 0,
+        buttons: [
+          { label: '再来一遍', kind: 'ink', onClick: newGame },
+          { label: '返回目录', onClick: () => Shell.back('../index.html') }
+        ]
+      });
+    }, 520);
+  }
+
+  function newGame(){
+    clearTimers();
+    S.seq = [Shell.rand(4)];
+    S.step = 0;
+    S.level = 1;
+    S.playing = false;
+    S.locked = false;
+    const sv = save();
+    uiBest.textContent = '最长 ' + (sv.best || 0) + ' 拍';
+    paintSeq();
+    uiStatus.textContent = '看好了…';
+    play();
+  }
+
+  document.getElementById('btnPlay').addEventListener('click', () => {
+    if(S.playing) return;
+    Sound.tone(660, .08, 'sine', .1);
+    newGame();
+  });
+  document.getElementById('btnReplay').addEventListener('click', () => {
+    if(S.playing || !S.seq.length) return;
+    S.step = 0;
+    paintSeq();
+    play();
+  });
+  document.getElementById('btnBack').addEventListener('click', () => Shell.back('../index.html'));
+  Shell.soundBtn(document.getElementById('btnSound'));
+
+  build();
+  // 键盘 1-4 也可以拍
+  document.addEventListener('keydown', e => {
+    const k = parseInt(e.key, 10);
+    if(k >= 1 && k <= 4) press(k - 1);
+    if(e.key === ' ' || e.key === 'Enter'){ e.preventDefault(); if(!S.playing) newGame(); }
+  });
+
+  const sv0 = save();
+  uiBest.textContent = '最长 ' + (sv0.best || 0) + ' 拍';
+  uiStatus.textContent = '按「开始」看一遍';
+  S.locked = true;
+})();
+</script>
+</body>
+</html>
